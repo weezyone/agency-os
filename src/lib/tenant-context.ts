@@ -32,6 +32,8 @@ export function withTenantContext<T>(
   return storage.run(context, operation);
 }
 
-export function tenantFilter<T extends Record<string, unknown>>(filter?: T) {
-  return { tenantId: currentTenantId(), ...(filter ?? {}) } as { tenantId: string } & T;
+type DeepWritable<T> = T extends (...args: never[]) => unknown ? T : { -readonly [K in keyof T]: DeepWritable<T[K]> };
+
+export function tenantFilter<const T extends Record<string, unknown>>(filter?: T) {
+  return { tenantId: currentTenantId(), ...(filter ?? {}) } as { tenantId: string } & DeepWritable<T>;
 }

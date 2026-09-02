@@ -257,7 +257,7 @@ export const identityRepository = {
 
   async getMemberByEmail(email: string, tenantId = currentTenantId()) {
     const { members } = await collections();
-    return members.findOne({ tenantId, email: normalizeEmail(email) }, { projection: { _id: 0 } });
+    return members.findOne<Member>({ tenantId, email: normalizeEmail(email) }, { projection: { _id: 0 } });
   },
 
   async createApiKey(input: CreateApiKeyInput & { createdBy: string }) {

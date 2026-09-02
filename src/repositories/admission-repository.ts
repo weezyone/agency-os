@@ -13,7 +13,7 @@ const collections = lazyAsync(async () => {
   const buckets = db.collection<UsageBucket>("usage_buckets");
   const indexes = await listCollectionIndexes(reservations);
   const legacyKey = indexes.find((index) => index.unique && index.key?.key === 1 && Object.keys(index.key).length === 1);
-  if (legacyKey && legacyKey.name !== "_id_") await reservations.dropIndex(legacyKey.name).catch(() => undefined);
+  if (legacyKey?.name && legacyKey.name !== "_id_") await reservations.dropIndex(legacyKey.name).catch(() => undefined);
   await Promise.all([
     reservations.createIndex({ id: 1 }, { unique: true }),
     reservations.createIndex({ tenantId: 1, key: 1 }, { unique: true }),
