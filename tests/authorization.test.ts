@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AuthenticationRequiredError,
   authenticateRequest,
@@ -6,6 +6,12 @@ import {
   requirePrincipal,
 } from "@/lib/authorization";
 import { resetEnvForTests } from "@/lib/env";
+
+vi.mock("@/repositories/tenant-repository", () => ({
+  tenantRepository: {
+    ensureBootstrapTenant: vi.fn(async () => undefined),
+  },
+}));
 
 const originalEnv = { ...process.env };
 const token = "bootstrap-owner-token-with-more-than-thirty-two-characters";

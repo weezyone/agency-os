@@ -52,14 +52,14 @@ export function normalizeQaResult(qa: QaResult, minQaScore: number): QaResult {
     ...qa.findings,
   ];
 
+  const combinedInstructions = [...generatedInstructions, ...qa.revisionInstructions];
+
   return {
     ...qa,
     verdict: "revise",
-    revisionInstructions: qa.revisionInstructions.length
-      ? qa.revisionInstructions
-      : generatedInstructions.length
-        ? generatedInstructions
-        : ["Address the QA summary and resubmit concrete acceptance evidence."],
+    revisionInstructions: combinedInstructions.length
+      ? combinedInstructions
+      : ["Address the QA summary and resubmit concrete acceptance evidence."],
   };
 }
 
