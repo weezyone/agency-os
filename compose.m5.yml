@@ -1,0 +1,40 @@
+name: agency-os
+
+services:
+  web:
+    build:
+      context: .
+      target: web
+    image: agency-os-web:0.5.0
+    env_file: .env.local
+    environment:
+      AGENCY_WORKSPACE_ROOT: /var/lib/agency-os/workspaces
+      AGENCY_ARTIFACT_ROOT: /var/lib/agency-os/artifacts
+    ports:
+      - "3000:3000"
+    volumes:
+      - ${AGENCY_HOST_DATA_ROOT:?Set AGENCY_HOST_DATA_ROOT to an absolute host path}/workspaces:/var/lib/agency-os/workspaces
+      - ${AGENCY_HOST_DATA_ROOT:?Set AGENCY_HOST_DATA_ROOT to an absolute host path}/artifacts:/var/lib/agency-os/artifacts
+    init: true
+    restart: unless-stopped
+
+  runner:
+    build:
+      context: .
+      target: worker
+    image: agency-os-runner:0.5.0
+    env_file: .env.local
+    environment:
+      AGENCY_WORKSPACE_ROOT: /var/lib/agency-os/workspaces
+      AGENCY_ARTIFACT_ROOT: /var/lib/agency-os/artifacts
+      AGENCY_SANDBOX_HOST_WORKSPACE_ROOT: ${AGENCY_HOST_DATA_ROOT:?Set AGENCY_HOST_DATA_ROOT to an absolute host path}/workspaces
+      AGENCY_WORKSPACE_PROVIDER: docker-isolated
+    volumes:
+      - ${AGENCY_HOST_DATA_ROOT:?Set AGENCY_HOST_DATA_ROOT to an absolute host path}/workspaces:/var/lib/agency-os/workspaces
+      - ${AGENCY_HOST_DATA_ROOT:?Set AGENCY_HOST_DATA_ROOT to an absolute host path}/artifacts:/var/lib/agency-os/artifacts
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Set DOCKER_GID to: stat -c '%g' /var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:?Set DOCKER_GID to the group ID of /var/run/docker.sock}"
+    init: true
+    restart: unless-stopped

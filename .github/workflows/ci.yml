@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm run check
+      - run: npm run build
+        env:
+          OPENAI_API_KEY: ci-placeholder
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          MONGODB_DATABASE: agency_os_ci
+
+  sandbox-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f docker/sandbox.Dockerfile -t agency-os-sandbox:ci .

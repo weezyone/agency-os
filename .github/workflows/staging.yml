@@ -1,0 +1,49 @@
+name: M7 staging release gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package.json
+      - run: npm install --no-audit --no-fund
+      - run: npm run validate:release
+      - run: npm run check
+      - run: npm run build
+      - name: Build runtime images
+        run: |
+          docker build --target web -t agency-os-web:${{ github.sha }} .
+          docker build --target worker -t agency-os-runner:${{ github.sha }} .
+
+  acceptance:
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      AGENCY_STAGING_BASE_URL: ${{ vars.AGENCY_STAGING_BASE_URL }}
+      AGENCY_STAGING_API_KEY_A: ${{ secrets.AGENCY_STAGING_API_KEY_A }}
+      AGENCY_STAGING_API_KEY_B: ${{ secrets.AGENCY_STAGING_API_KEY_B }}
+      AGENCY_STAGING_PROJECT_ID_A: ${{ vars.AGENCY_STAGING_PROJECT_ID_A }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Run tenant-isolation staging acceptance
+        run: |
+          test -n "$AGENCY_STAGING_BASE_URL"
+          test -n "$AGENCY_STAGING_API_KEY_A"
+          npm run staging:acceptance

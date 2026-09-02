@@ -1,0 +1,80 @@
+name: agency-os
+
+# M7 staging topology: MongoDB and S3-compatible storage are external managed
+# services. Repository validation is delegated to a separately operated remote
+# sandbox API, so AgencyOS runners do not receive a Docker socket.
+x-agency-common: &agency-common
+  env_file: .env.local
+  environment: &agency-environment
+    NODE_ENV: production
+    AGENCY_AUTH_MODE: ${AGENCY_AUTH_MODE:-database}
+    AGENCY_OIDC_ALLOWED_ISSUER_HOSTS: ${AGENCY_OIDC_ALLOWED_ISSUER_HOSTS:?Set AGENCY_OIDC_ALLOWED_ISSUER_HOSTS}
+    AGENCY_OIDC_REQUIRE_VERIFIED_EMAIL: "true"
+    AGENCY_ALLOW_GLOBAL_INTEGRATION_FALLBACK: "false"
+    AGENCY_TRANSACTIONS_REQUIRED: "true"
+    AGENCY_ARTIFACT_PROVIDER: s3
+    AGENCY_S3_BUCKET: ${AGENCY_S3_BUCKET:?Set AGENCY_S3_BUCKET}
+    AGENCY_WORKSPACE_PROVIDER: remote-http
+    AGENCY_REMOTE_SANDBOX_URL: ${AGENCY_REMOTE_SANDBOX_URL:?Set AGENCY_REMOTE_SANDBOX_URL}
+    AGENCY_REMOTE_SANDBOX_HMAC_SECRET: ${AGENCY_REMOTE_SANDBOX_HMAC_SECRET:?Set AGENCY_REMOTE_SANDBOX_HMAC_SECRET}
+    AGENCY_ADMISSION_MAX_GLOBAL_READY_JOBS: ${AGENCY_ADMISSION_MAX_GLOBAL_READY_JOBS:-1000}
+    AGENCY_ADMISSION_MAX_GLOBAL_ACTIVE_JOBS: ${AGENCY_ADMISSION_MAX_GLOBAL_ACTIVE_JOBS:-100}
+    AGENCY_OTEL_ENABLED: ${AGENCY_OTEL_ENABLED:-true}
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:?Set OTEL_EXPORTER_OTLP_ENDPOINT}
+  init: true
+  restart: unless-stopped
+
+services:
+  web:
+    <<: *agency-common
+    build:
+      context: .
+      target: web
+    image: agency-os-web:0.7.0
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  runner-artifact:
+    <<: *agency-common
+    build:
+      context: .
+      target: remote-worker
+    image: agency-os-runner:0.7.0
+    environment:
+      <<: *agency-environment
+      AGENCY_RUNNER_ID: artifact-1
+      AGENCY_RUNNER_QUEUES: artifact,events
+      AGENCY_RUNNER_LABELS: artifact,node22
+      AGENCY_RUNNER_CONCURRENCY: ${AGENCY_ARTIFACT_RUNNER_CONCURRENCY:-2}
+
+  runner-workspace:
+    <<: *agency-common
+    build:
+      context: .
+      target: remote-worker
+    image: agency-os-runner:0.7.0
+    environment:
+      <<: *agency-environment
+      AGENCY_RUNNER_ID: workspace-1
+      AGENCY_RUNNER_QUEUES: workspace
+      AGENCY_RUNNER_LABELS: remote-sandbox,client-safe
+      AGENCY_RUNNER_CONCURRENCY: ${AGENCY_WORKSPACE_RUNNER_CONCURRENCY:-2}
+
+  runner-external:
+    <<: *agency-common
+    build:
+      context: .
+      target: remote-worker
+    image: agency-os-runner:0.7.0
+    environment:
+      <<: *agency-environment
+      AGENCY_RUNNER_ID: external-1
+      AGENCY_RUNNER_QUEUES: external-actions
+      AGENCY_RUNNER_LABELS: integrations
+      AGENCY_RUNNER_CONCURRENCY: ${AGENCY_EXTERNAL_RUNNER_CONCURRENCY:-1}

@@ -1,0 +1,56 @@
+name: agency-os
+
+# M6 removes the web tier's dependency on runner-local files. MongoDB carries
+# control-plane state and an S3-compatible bucket carries immutable evidence.
+# Each runner keeps only disposable workspaces on its own host.
+services:
+  web:
+    build:
+      context: .
+      target: web
+    image: agency-os-web:0.6.0
+    env_file: .env.local
+    environment:
+      NODE_ENV: production
+      AGENCY_AUTH_MODE: ${AGENCY_AUTH_MODE:-bootstrap}
+      AGENCY_TRANSACTIONS_REQUIRED: "true"
+      AGENCY_ARTIFACT_PROVIDER: s3
+      AGENCY_S3_BUCKET: ${AGENCY_S3_BUCKET:?Set AGENCY_S3_BUCKET}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    init: true
+    restart: unless-stopped
+
+  runner:
+    build:
+      context: .
+      target: worker
+    image: agency-os-runner:0.6.0
+    env_file: .env.local
+    environment:
+      NODE_ENV: production
+      AGENCY_AUTH_MODE: ${AGENCY_AUTH_MODE:-bootstrap}
+      AGENCY_TRANSACTIONS_REQUIRED: "true"
+      AGENCY_ARTIFACT_PROVIDER: s3
+      AGENCY_S3_BUCKET: ${AGENCY_S3_BUCKET:?Set AGENCY_S3_BUCKET}
+      AGENCY_WORKSPACE_ROOT: /var/lib/agency-os/workspaces
+      AGENCY_SANDBOX_HOST_WORKSPACE_ROOT: ${AGENCY_HOST_DATA_ROOT:?Set AGENCY_HOST_DATA_ROOT to an absolute host path}/workspaces
+      AGENCY_WORKSPACE_PROVIDER: docker-isolated
+      AGENCY_RUNNER_REGION: ${AGENCY_RUNNER_REGION:-local}
+      AGENCY_RUNNER_QUEUES: ${AGENCY_RUNNER_QUEUES:-artifact,workspace,external-actions,events}
+      AGENCY_RUNNER_RESOURCE_CLASSES: ${AGENCY_RUNNER_RESOURCE_CLASSES:-standard}
+      AGENCY_RUNNER_LABELS: ${AGENCY_RUNNER_LABELS:-}
+    volumes:
+      - ${AGENCY_HOST_DATA_ROOT:?Set AGENCY_HOST_DATA_ROOT to an absolute host path}/workspaces:/var/lib/agency-os/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Set DOCKER_GID to: stat -c '%g' /var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:?Set DOCKER_GID to the group ID of /var/run/docker.sock}"
+    init: true
+    restart: unless-stopped
