@@ -1,9 +1,16 @@
-import { FlatCompat } from "@eslint/eslintrc";
-import { dirname } from "path";
-import { fileURLToPath } from "url";
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTypescript from "eslint-config-next/typescript";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const compat = new FlatCompat({ baseDirectory: __dirname });
-
-export default [...compat.extends("next/core-web-vitals", "next/typescript")];
+export default defineConfig([
+  ...nextVitals,
+  ...nextTypescript,
+  {
+    rules: {
+      // Pre-existing sessionStorage hydration patterns in operator-dashboard rely on
+      // setting state inside effects; keep the react-hooks v7 rule off for now.
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),
+]);
