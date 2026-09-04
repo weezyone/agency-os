@@ -37,7 +37,7 @@ describe("controlled workspace policy", () => {
       { operation: "update", path: "src/a.ts", content: "export const a = 2", rationale: "Update a" },
     ])).toThrow(/duplicate/i);
     expect(() => validateFileChanges([
-      { operation: "create", path: "src/config.ts", content: "const token = 'ghp_' + 'abcdefghijklmnopqrstuvwxyz123456'", rationale: "Bad fixture" },
+      { operation: "create", path: "src/config.ts", content: "const token = 'ghp_abcdefghijklmnopqrstuvwxyz123456'", rationale: "Bad fixture" },
     ])).toThrow(/token/i);
   });
 
@@ -78,6 +78,7 @@ describe("controlled workspace policy", () => {
     const now = new Date();
     const workspace: WorkspaceRecord = {
       id: "workspace-1",
+      tenantId: "tenant-1",
       runId: "run-1",
       attemptId: "attempt-1",
       projectId: "project-1",

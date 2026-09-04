@@ -7,7 +7,7 @@ const originalEnv = { ...process.env };
 const workspaceRoot = "/tmp/agency-os/workspaces";
 
 function setSandboxEnv() {
-  process.env.NODE_ENV = "test";
+  (process.env as Record<string, string>).NODE_ENV = "test";
   process.env.OPENAI_API_KEY = "must-not-enter-sandbox";
   process.env.MONGODB_URI = "mongodb://127.0.0.1:27017";
   process.env.MONGODB_DATABASE = "agency_os_test";

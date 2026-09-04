@@ -366,7 +366,7 @@ async function processClaimedExecutionJobInTenant(
 
   try {
     await guard.assertActive("job-start");
-    let run = await executionRepository.get(started.runId);
+    let run: ExecutionRun | null = await executionRepository.get(started.runId);
     if (!run) throw new Error("Execution run not found");
 
     run = await recoverAbandonedAttempt(run, runnerId);

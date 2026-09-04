@@ -8,6 +8,11 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,6 +25,10 @@ jobs:
           OPENAI_API_KEY: ci-placeholder
           MONGODB_URI: mongodb://127.0.0.1:27017
           MONGODB_DATABASE: agency_os_ci
+          AGENCY_AUTH_MODE: bootstrap
+          AGENCY_BOOTSTRAP_OWNER_TOKEN: ci-placeholder-bootstrap-owner-token-32chars
+          AGENCY_TRANSACTIONS_REQUIRED: "true"
+          AGENCY_SECRET_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 
   sandbox-image:
     runs-on: ubuntu-latest

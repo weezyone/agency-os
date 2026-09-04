@@ -26,11 +26,14 @@ function appendLimited(current: Buffer[], chunk: Buffer, state: { bytes: number;
 
 function dockerEnvironment(): NodeJS.ProcessEnv {
   const allowed = ["PATH", "HOME", "DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_CONTEXT"];
-  return Object.fromEntries(
-    allowed
-      .map((key) => [key, process.env[key]])
-      .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-  );
+  return {
+    NODE_ENV: process.env.NODE_ENV,
+    ...Object.fromEntries(
+      allowed
+        .map((key) => [key, process.env[key]])
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    ),
+  };
 }
 
 async function directoryBytes(root: string): Promise<number> {

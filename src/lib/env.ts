@@ -252,7 +252,7 @@ const envSchema = z.object({
     context.addIssue({
       code: "custom",
       path: ["AGENCY_ALLOW_GLOBAL_INTEGRATION_FALLBACK"],
-      message: "Production multi-tenant deployments cannot use global GitHub or Linear credential fallbacks",
+      message: "Production multi-tenant deployments cannot use a global integration credential fallback for GitHub or Linear",
     });
   }
   if (value.NODE_ENV === "production" && value.AGENCY_OIDC_ALLOW_INSECURE_HTTP) {

@@ -55,10 +55,10 @@ export function normalizeQaResult(qa: QaResult, minQaScore: number): QaResult {
   return {
     ...qa,
     verdict: "revise",
-    revisionInstructions: qa.revisionInstructions.length
-      ? qa.revisionInstructions
-      : generatedInstructions.length
-        ? generatedInstructions
+    revisionInstructions: generatedInstructions.length
+      ? generatedInstructions
+      : qa.revisionInstructions.length
+        ? qa.revisionInstructions
         : ["Address the QA summary and resubmit concrete acceptance evidence."],
   };
 }

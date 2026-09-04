@@ -63,7 +63,7 @@ const collections = lazyAsync(async () => {
 
   const indexes = await listCollectionIndexes(actions);
   const legacyIdempotency = indexes.find((index) => index.unique && index.key?.idempotencyKey === 1 && Object.keys(index.key).length === 1);
-  if (legacyIdempotency && legacyIdempotency.name !== "_id_") {
+  if (legacyIdempotency && legacyIdempotency.name && legacyIdempotency.name !== "_id_") {
     await actions.dropIndex(legacyIdempotency.name).catch(() => undefined);
   }
 
@@ -205,7 +205,7 @@ export const actionRepository = {
       statuses.map(async (status) => [status, await actions.countDocuments(tenantFilter({ status }))]),
     )) as Record<ActionStatus, number>;
     const awaitingApproval = await actions.countDocuments(tenantFilter({
-      status: "proposed",
+      status: "proposed" as ActionStatus,
       $expr: { $lt: [{ $size: "$approvals" }, "$requiredApprovals"] },
     }));
     return { counts, awaitingApproval };

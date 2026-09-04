@@ -63,6 +63,7 @@ export function sanitizeBranchName(value: string) {
   const normalized = value
     .toLowerCase()
     .replace(/[^a-z0-9/_-]+/g, "-")
+    .replace(/-*\/-*/g, "/")
     .replace(/\/{2,}/g, "/")
     .replace(/^-+|-+$/g, "")
     .slice(0, 180);

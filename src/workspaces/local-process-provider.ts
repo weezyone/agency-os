@@ -12,6 +12,7 @@ function restrictedEnvironment(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   // Workspace commands must not inherit AgencyOS credentials (OpenAI, MongoDB,
   // GitHub, Linear, etc.). Only basic process/runtime values are inherited.
   const base: NodeJS.ProcessEnv = {
+    NODE_ENV: process.env.NODE_ENV,
     PATH: process.env.PATH,
     LANG: process.env.LANG ?? "C.UTF-8",
     LC_ALL: process.env.LC_ALL,
@@ -25,9 +26,12 @@ function restrictedEnvironment(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv
     npm_config_fund: "false",
     npm_config_update_notifier: "false",
   };
-  return Object.fromEntries(
-    Object.entries({ ...base, ...overrides }).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-  );
+  return {
+    NODE_ENV: base.NODE_ENV,
+    ...Object.fromEntries(
+      Object.entries({ ...base, ...overrides }).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    ),
+  };
 }
 
 function appendLimited(current: Buffer[], chunk: Buffer, state: { bytes: number; truncated: boolean }, limit: number) {

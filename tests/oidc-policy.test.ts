@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 function configure(overrides: Record<string, string> = {}) {
-  process.env.NODE_ENV = "production";
+  (process.env as Record<string, string>).NODE_ENV = "production";
   process.env.OPENAI_API_KEY = "test-key";
   process.env.MONGODB_URI = "mongodb://localhost:27017";
   process.env.MONGODB_DATABASE = "agency_os_test";

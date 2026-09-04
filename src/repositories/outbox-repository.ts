@@ -19,7 +19,7 @@ const collections = lazyAsync(async () => {
   );
   const indexes = await listCollectionIndexes(outbox);
   const legacyIdempotency = indexes.find((index) => index.unique && index.key?.idempotencyKey === 1 && Object.keys(index.key).length === 1);
-  if (legacyIdempotency && legacyIdempotency.name !== "_id_") {
+  if (legacyIdempotency && legacyIdempotency.name && legacyIdempotency.name !== "_id_") {
     await outbox.dropIndex(legacyIdempotency.name).catch(() => undefined);
   }
   await Promise.all([
@@ -198,10 +198,10 @@ export const outboxRepository = {
   async summary() {
     const { outbox } = await collections();
     const [pending, leased, retryWait, deadLetter] = await Promise.all([
-      outbox.countDocuments(tenantFilter({ status: "pending" })),
-      outbox.countDocuments(tenantFilter({ status: "leased" })),
-      outbox.countDocuments(tenantFilter({ status: "retry_wait" })),
-      outbox.countDocuments(tenantFilter({ status: "dead_letter" })),
+      outbox.countDocuments(tenantFilter({ status: "pending" as OutboxMessage["status"] })),
+      outbox.countDocuments(tenantFilter({ status: "leased" as OutboxMessage["status"] })),
+      outbox.countDocuments(tenantFilter({ status: "retry_wait" as OutboxMessage["status"] })),
+      outbox.countDocuments(tenantFilter({ status: "dead_letter" as OutboxMessage["status"] })),
     ]);
     return { pending, leased, retryWait, deadLetter };
   },
