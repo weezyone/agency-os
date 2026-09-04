@@ -15,7 +15,7 @@ import {
   createTenantSchema,
   updateTenantSchema,
 } from "@/schemas/tenant";
-import type { Principal } from "@/schemas/identity";
+import type { Member, Principal } from "@/schemas/identity";
 import { encryptedEnvelopeSchema } from "@/schemas/secrets";
 
 function transientCiphertext(tenantId: string, name: string, value: string) {
@@ -202,7 +202,7 @@ export async function completeOidcLogin(request: Request) {
         throw new Error("OIDC email domain is not allowed for this tenant");
       }
 
-      let member = await identityRepository.getMemberByEmail(email, tenant.id);
+      let member: Member | null = await identityRepository.getMemberByEmail(email, tenant.id);
       if (transaction.invitationId) {
         const invitations = await tenantRepository.listInvitations();
         const invitation = invitations.find((candidate) => candidate.id === transaction.invitationId);

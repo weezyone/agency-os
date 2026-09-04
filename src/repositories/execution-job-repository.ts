@@ -249,7 +249,7 @@ export const executionJobRepository = {
     const { jobs } = await collections();
     return jobs.countDocuments(tenantFilter({
       projectId,
-      status: { $in: ["queued", "leased", "running", "retry_wait"] },
+      status: { $in: ["queued", "leased", "running", "retry_wait"] as ExecutionJob["status"][] },
     }));
   },
 
@@ -355,9 +355,9 @@ export const executionJobRepository = {
     const leaseExpiresAt = new Date(now.getTime() + input.leaseMs);
     const job = await jobs.findOneAndUpdate(
       {
-        status: { $in: ["queued", "retry_wait"] },
+        status: { $in: ["queued", "retry_wait"] as ExecutionJob["status"][] },
         availableAt: { $lte: now },
-        queue: { $in: input.queues },
+        queue: { $in: input.queues as ExecutionJob["queue"][] },
         resourceClass: { $in: input.resourceClasses },
         $and: [
           {

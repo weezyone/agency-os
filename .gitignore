@@ -10,3 +10,4 @@ coverage
 !.env.example
 .agency-os-data
 *.zip
+package-lock.json
