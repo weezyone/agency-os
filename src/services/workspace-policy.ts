@@ -63,8 +63,9 @@ export function sanitizeBranchName(value: string) {
   const normalized = value
     .toLowerCase()
     .replace(/[^a-z0-9/_-]+/g, "-")
+    .replace(/-*\/+-*/g, "/")
     .replace(/\/{2,}/g, "/")
-    .replace(/^-+|-+$/g, "")
+    .replace(/^[-/]+|[-/]+$/g, "")
     .slice(0, 180);
   return normalized || "agencyos/change";
 }
@@ -146,7 +147,8 @@ export function validateFileChanges(changes: WorkspaceFileChange[]) {
       throw new Error(`Worker change for ${safePath} exceeds the per-file byte limit`);
     }
     if (change.content) {
-      const match = blockedContentPatterns.find((rule) => rule.pattern.test(change.content ?? ""));
+      const scannable = [change.content, change.content.replace(/["'`]\s*\+\s*["'`]/g, "")];
+      const match = blockedContentPatterns.find((rule) => scannable.some((content) => rule.pattern.test(content)));
       if (match) throw new Error(`Worker change for ${safePath} contains ${match.label}`);
     }
     totalBytes += bytes;

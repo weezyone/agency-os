@@ -61,6 +61,7 @@ async function gitCredentialEnv(repositoryUrl: string): Promise<NodeJS.ProcessEn
   const config = env();
   const parsed = new URL(repositoryUrl);
   const credentials: NodeJS.ProcessEnv = {
+    NODE_ENV: process.env.NODE_ENV,
     GIT_TERMINAL_PROMPT: "0",
     GIT_ASKPASS: "echo",
   };
@@ -744,7 +745,7 @@ export function enrichWorkerOutput(input: {
     artifacts: [
       ...input.output.artifacts,
       {
-        type: "code",
+        type: "code" as const,
         title: "Verified workspace patch",
         description: `${input.workspace.changedFiles.length} changed file(s), +${input.workspace.additions}/-${input.workspace.deletions}`,
         content: input.workspace.diff,
@@ -759,7 +760,7 @@ export function enrichWorkerOutput(input: {
         },
       },
       {
-        type: "test",
+        type: "test" as const,
         title: "Workspace validation evidence",
         description: input.workspace.validation?.summary ?? "Validation did not produce a summary.",
         content: JSON.stringify(commandEvidence, null, 2),

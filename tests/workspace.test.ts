@@ -78,6 +78,7 @@ describe("controlled workspace policy", () => {
     const now = new Date();
     const workspace: WorkspaceRecord = {
       id: "workspace-1",
+      tenantId: "tenant-1",
       runId: "run-1",
       attemptId: "attempt-1",
       projectId: "project-1",

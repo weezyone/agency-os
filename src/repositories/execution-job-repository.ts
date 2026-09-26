@@ -357,7 +357,7 @@ export const executionJobRepository = {
       {
         status: { $in: ["queued", "retry_wait"] },
         availableAt: { $lte: now },
-        queue: { $in: input.queues },
+        queue: { $in: input.queues as ExecutionJob["queue"][] },
         resourceClass: { $in: input.resourceClasses },
         $and: [
           {

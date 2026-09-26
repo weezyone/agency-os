@@ -63,7 +63,7 @@ const collections = lazyAsync(async () => {
 
   const indexes = await listCollectionIndexes(actions);
   const legacyIdempotency = indexes.find((index) => index.unique && index.key?.idempotencyKey === 1 && Object.keys(index.key).length === 1);
-  if (legacyIdempotency && legacyIdempotency.name !== "_id_") {
+  if (legacyIdempotency?.name && legacyIdempotency.name !== "_id_") {
     await actions.dropIndex(legacyIdempotency.name).catch(() => undefined);
   }
 

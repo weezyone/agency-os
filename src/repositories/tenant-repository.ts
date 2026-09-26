@@ -221,7 +221,7 @@ export const tenantRepository = {
     return oidcConnections.findOne({ tenantId, status: "active" }, { projection: { _id: 0 } });
   },
 
-  async createOidcTransaction(input: Omit<OidcTransaction, "id" | "createdAt" | "consumedAt"> & { state: string }) {
+  async createOidcTransaction(input: Omit<OidcTransaction, "id" | "createdAt" | "consumedAt" | "stateHash"> & { state: string }) {
     const { oidcTransactions } = await collections();
     const now = new Date();
     const record: OidcTransaction = {

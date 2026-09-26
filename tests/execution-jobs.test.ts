@@ -6,7 +6,7 @@ import { publicExecutionJob } from "@/services/execution-job-public";
 const originalEnv = { ...process.env };
 
 function baseEnv() {
-  process.env.NODE_ENV = "test";
+  Object.assign(process.env, { NODE_ENV: "test" });
   process.env.OPENAI_API_KEY = "test-openai-key";
   process.env.MONGODB_URI = "mongodb://127.0.0.1:27017";
   process.env.MONGODB_DATABASE = "agency_os_test";

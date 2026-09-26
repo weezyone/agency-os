@@ -7,6 +7,7 @@ function task(overrides: Partial<Task> = {}): Task {
   const now = new Date();
   return {
     id: "task-1",
+    tenantId: "tenant-1",
     projectId: "project-1",
     title: "Build dashboard",
     description: "Implement the operator dashboard",

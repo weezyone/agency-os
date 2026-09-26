@@ -109,7 +109,7 @@ export const executionRepository = {
 
   async get(id: string) {
     const { runs } = await collections();
-    return runs.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
+    return runs.findOne<ExecutionRun>(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
   async getDetail(id: string) {
