@@ -22,7 +22,17 @@ const collection = lazyAsync(async () => {
   return artifacts;
 });
 
+/** Tenant-scoped store for execution artifacts, keyed uniquely per run/attempt/kind. */
 export const artifactRepository = {
+  /**
+   * Creates an artifact record, returning the existing one for a repeated run/attempt/kind.
+   *
+   * Retried uploads race on the unique index; the duplicate-key path re-reads
+   * the winner instead of failing so artifact registration is idempotent.
+   *
+   * @param input - Artifact fields except id, tenantId, and createdAt.
+   * @returns The existing or newly created artifact record.
+   */
   async createOrGet(input: Omit<ArtifactRecord, "id" | "tenantId" | "createdAt">) {
     const artifacts = await collection();
     const tenantId = currentTenantId();
@@ -41,11 +51,19 @@ export const artifactRepository = {
     }
   },
 
+  /**
+   * @param id - Artifact id within the current tenant.
+   * @returns The artifact record, or null when not found.
+   */
   async get(id: string) {
     const artifacts = await collection();
     return artifacts.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param runId - Run id within the current tenant.
+   * @returns Non-expired artifacts for the run, oldest first.
+   */
   async listRun(runId: string) {
     const artifacts = await collection();
     return artifacts.find(tenantFilter({
@@ -54,6 +72,11 @@ export const artifactRepository = {
     }), { projection: { _id: 0 } }).sort({ createdAt: 1 }).toArray();
   },
 
+  /**
+   * @param runId - Run id within the current tenant.
+   * @param attemptId - Attempt id within the run.
+   * @returns Non-expired artifacts for the attempt, oldest first.
+   */
   async listAttempt(runId: string, attemptId: string) {
     const artifacts = await collection();
     return artifacts
@@ -66,6 +89,9 @@ export const artifactRepository = {
       .toArray();
   },
 
+  /**
+   * @returns Active/expired artifact counts and total bytes of active artifacts for the tenant.
+   */
   async summary() {
     const artifacts = await collection();
     const now = new Date();
@@ -80,6 +106,16 @@ export const artifactRepository = {
     return { activeCount, expiredCount, activeBytes: bytes?.total ?? 0 };
   },
 
+  /**
+   * Lists expired artifacts across all tenants for the garbage collector.
+   *
+   * Deliberately bypasses the tenant filter: GC is a platform-level duty and
+   * must see every tenant's expired rows.
+   *
+   * @param now - Reference time for expiry comparison.
+   * @param limit - Maximum batch size, oldest expiry first.
+   * @returns Expired artifact records.
+   */
   async listExpiredAllTenants(now = new Date(), limit = 100) {
     const artifacts = await collection();
     return artifacts
@@ -89,11 +125,24 @@ export const artifactRepository = {
       .toArray();
   },
 
+  /**
+   * Deletes an artifact by id with an explicit tenant id (used by cross-tenant GC).
+   *
+   * @param id - Artifact id.
+   * @param tenantId - Owning tenant, required so deletes stay tenant-scoped.
+   * @returns The MongoDB delete result.
+   */
   async deleteGlobal(id: string, tenantId: string) {
     const artifacts = await collection();
     return artifacts.deleteOne({ id, tenantId });
   },
 
+  /**
+   * @param runId - Run id within the current tenant.
+   * @param attemptId - Attempt id within the run.
+   * @param kind - Artifact kind to look up.
+   * @returns The matching artifact, or null when not found.
+   */
   async getKind(runId: string, attemptId: string, kind: ArtifactKind) {
     const artifacts = await collection();
     return artifacts.findOne(tenantFilter({ runId, attemptId, kind }), { projection: { _id: 0 } });

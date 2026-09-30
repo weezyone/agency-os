@@ -9,6 +9,18 @@ function unitsForRun(run: ExecutionRun) {
     : env().AGENCY_ARTIFACT_RUN_COST_UNITS;
 }
 
+/**
+ * Admits an execution attempt into the runner queue by reserving daily budget
+ * units. Global, tenant, and project concurrency limits are checked before
+ * reserving so a single tenant or project cannot starve the shared fleet, and
+ * the reservation key is derived from run id plus attempt number to keep
+ * duplicate enqueues for the same attempt idempotent.
+ *
+ * @param run The queued execution run requesting admission.
+ * @param targetAttemptNumber Attempt number the reservation will cover.
+ * @returns The admission reservation (status may be `reserved` or a terminal state).
+ * @throws When any global, tenant, or project concurrency limit is reached.
+ */
 export async function admitExecutionRun(run: ExecutionRun, targetAttemptNumber: number) {
   const config = env();
   const [tenantSummary, globalSummary, projectActive] = await Promise.all([
@@ -40,6 +52,16 @@ export async function admitExecutionRun(run: ExecutionRun, targetAttemptNumber: 
   });
 }
 
+/**
+ * Settles an admission reservation once the job it funded reaches a terminal
+ * state: `consumed` charges the reserved units against the daily budget, while
+ * `released` returns them (e.g. the job was cancelled before delivery).
+ *
+ * @param reservationId Reservation to settle; `null` is tolerated for jobs
+ *   that predate admission control.
+ * @param outcome Whether the reserved units were consumed or released.
+ * @returns The settled reservation, or `null` when no reservation id was given.
+ */
 export async function settleExecutionAdmission(reservationId: string | null, outcome: "consumed" | "released") {
   if (!reservationId) return null;
   return admissionRepository.settle(reservationId, outcome);

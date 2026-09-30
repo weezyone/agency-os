@@ -1,3 +1,9 @@
+/**
+ * Next.js proxy hook (the Next 16 successor to middleware): runs before every
+ * request matching `config.matcher` (all /api/* routes). Performs an optimistic
+ * anonymous-traffic gate; the real authorization boundary is requirePrincipal()
+ * inside each route handler.
+ */
 import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_API_PREFIXES = [

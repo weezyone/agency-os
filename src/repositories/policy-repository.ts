@@ -17,11 +17,32 @@ const collections = lazyAsync(async () => {
   return { policies };
 });
 
+/**
+ * Computes the integrity checksum of a policy document.
+ *
+ * Approval records embed this checksum so auditors can prove an action was
+ * governed by the exact policy content evaluated at decision time, even after
+ * the policy is later edited or retired.
+ *
+ * @param document - The policy document to checksum.
+ * @returns Hex-encoded SHA-256 of the document's JSON serialization.
+ */
 export function policyChecksum(document: ActionPolicyDocument) {
   return createHash("sha256").update(JSON.stringify(document)).digest("hex");
 }
 
+/** Tenant-scoped store for versioned action policies; exactly one version is active per tenant. */
 export const policyRepository = {
+  /**
+   * Creates the next policy version, optionally activating it atomically.
+   *
+   * Activation retires all other versions and points the tenant at the new one
+   * in a single transaction, so policy evaluation never observes a gap with no
+   * active policy.
+   *
+   * @param input - Policy name, document, creator, and whether to activate immediately.
+   * @returns The created policy record.
+   */
   async create(input: { name: string; document: ActionPolicyDocument; createdBy: string; activate: boolean }) {
     const { policies } = await collections();
     const latest = await policies.find(tenantFilter(), { projection: { _id: 0, version: 1 } }).sort({ version: -1 }).limit(1).next();
@@ -57,6 +78,12 @@ export const policyRepository = {
     });
   },
 
+  /**
+   * Activates an existing policy version, retiring the others in one transaction.
+   *
+   * @param id - Policy id within the current tenant.
+   * @returns The activated policy, or null when not found.
+   */
   async activate(id: string) {
     const { policies } = await collections();
     return withMongoTransaction(async (session) => {
@@ -78,11 +105,17 @@ export const policyRepository = {
     });
   },
 
+  /**
+   * @returns The tenant's active policy (highest version wins on ties), or null when none is active.
+   */
   async getActive() {
     const { policies } = await collections();
     return policies.findOne(tenantFilter({ status: "active" }), { projection: { _id: 0 }, sort: { version: -1 } });
   },
 
+  /**
+   * @returns All policy versions for the tenant, newest version first.
+   */
   async list() {
     const { policies } = await collections();
     return policies.find(tenantFilter(), { projection: { _id: 0 } }).sort({ version: -1 }).toArray();

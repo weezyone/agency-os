@@ -44,6 +44,9 @@ function client() {
   return cachedClient;
 }
 
+// Downloads are capped while buffering, not just via ContentLength, because a
+// missing or lied-about length header must not allow an oversized artifact
+// into memory.
 async function bodyToBuffer(body: unknown, maxBytes: number) {
   if (!body) return Buffer.alloc(0);
   if (body instanceof Uint8Array) {
@@ -66,6 +69,12 @@ async function bodyToBuffer(body: unknown, maxBytes: number) {
   return Buffer.concat(chunks, bytes);
 }
 
+/**
+ * S3-compatible artifact store. The client is cached per process and falls
+ * back to the AWS default credential chain when no explicit keys are
+ * configured. The content SHA-256 is stored as object metadata so integrity
+ * can be verified without trusting the bucket listing.
+ */
 export const s3ArtifactStore: ArtifactStore = {
   name: "s3",
 

@@ -2,6 +2,11 @@ import { apiError } from "@/lib/http";
 import { requirePrincipal } from "@/lib/authorization";
 import { prometheusMetrics } from "@/services/metrics-service";
 
+/**
+ * Prometheus scrape endpoint (text exposition format), scoped to the caller's tenant.
+ */
+
+/** Return Prometheus metrics. Requires `metrics:read`. */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "metrics:read");

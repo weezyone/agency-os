@@ -50,6 +50,12 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json().catch(() => ({}))) as T;
 }
 
+/**
+ * {@link SourceControlAdapter} backed by the GitHub REST API. Credentials and
+ * organization resolve per tenant through the integration secret service.
+ * Mutations are idempotent: a retry after a lost response recovers the
+ * remotely created resource instead of duplicating it.
+ */
 export const githubAdapter = {
   async createRepository(input: { name: string; description: string; private: boolean; projectId: string }) {
     const config = env();
@@ -69,6 +75,8 @@ export const githubAdapter = {
         has_issues: true,
         has_projects: true,
         auto_init: true,
+        // Stamped on the repo so the 422 recovery path below can prove an
+        // existing repo was created by this project, not by someone else.
         homepage: recoveryMarker,
       }),
     });

@@ -2,6 +2,12 @@ import { Agent } from "@mastra/core/agent";
 import { env } from "@/lib/env";
 import { agencyMemory } from "@/mastra/memory";
 
+/**
+ * Independent quality gate: scores worker output against the task's acceptance
+ * criteria and returns a pass/revise/fail verdict parsed as `QaResult`
+ * (src/schemas/execution.ts). Runs on a separate model (`AGENCY_QA_MODEL`)
+ * from the workers it evaluates.
+ */
 export const qualityGateAgent = new Agent({
   id: "quality-gate",
   name: "Agency Quality Gate",

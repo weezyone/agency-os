@@ -43,6 +43,18 @@ function bodyHash(body: string) {
   return createHash("sha256").update(body, "utf8").digest("hex");
 }
 
+/**
+ * Computes the HMAC-SHA256 signature for a remote sandbox request.
+ *
+ * The canonical string binds the timestamp and nonce (so the receiver can
+ * reject stale or replayed requests), the method and path (so a signature
+ * cannot be transplanted to a different endpoint), the SHA-256 body digest
+ * (so the payload cannot be altered in transit), and the audience (so a
+ * signature minted for one sandbox service cannot be replayed against another).
+ *
+ * @param input - Request components to sign; `method` is uppercased before signing.
+ * @returns Base64url-encoded HMAC-SHA256 of the canonical request string.
+ */
 export function remoteSandboxSignature(input: {
   method: string;
   pathname: string;
@@ -63,6 +75,16 @@ export function remoteSandboxSignature(input: {
   return createHmac("sha256", input.secret).update(canonical, "utf8").digest("base64url");
 }
 
+/**
+ * Verifies a remote sandbox signature against freshly computed expectations.
+ *
+ * The comparison is length-gated and uses `timingSafeEqual` so the result does
+ * not leak how many bytes matched, which would otherwise let an attacker
+ * forge a valid signature byte by byte via timing measurements.
+ *
+ * @param input - The signed request components plus the `signature` to check.
+ * @returns True only when the supplied signature matches exactly.
+ */
 export function verifyRemoteSandboxSignature(input: Parameters<typeof remoteSandboxSignature>[0] & { signature: string }) {
   const expected = Buffer.from(remoteSandboxSignature(input));
   const actual = Buffer.from(input.signature);
@@ -128,6 +150,15 @@ async function signedFetch(pathname: string, init: RequestInit, signal?: AbortSi
   return response;
 }
 
+/**
+ * Workspace provider that delegates sandboxed execution to a remote HTTP sandbox.
+ *
+ * Every request is HMAC-signed; the workspace is materialized from immutable
+ * repository/patch evidence before commands run, and the echoed request id is
+ * checked so a confused or malicious sandbox cannot substitute another
+ * command's result. The sandbox reports the SHA-256 of the resulting patch so
+ * callers can detect workspace tampering via `integrityViolation`.
+ */
 export const remoteHttpProvider: WorkspaceProcessProvider = {
   name: "remote-http",
 

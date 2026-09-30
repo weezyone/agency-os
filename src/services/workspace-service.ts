@@ -35,6 +35,7 @@ import { workspaceProcessProvider } from "@/workspaces/provider";
 import { tenantSecretOrFallback, TENANT_INTEGRATION_SECRET_NAMES } from "@/services/integration-secret-service";
 import type { CommandIsolation, SandboxResourceLimits } from "@/workspaces/contracts";
 
+/** Bounded snapshot of a checked-out repository handed to the worker agent. */
 export type RepositoryContext = {
   tree: string[];
   files: Array<{ path: string; content: string; truncated: boolean }>;
@@ -204,6 +205,20 @@ function branchName(run: ExecutionRun, attempt: ExecutionAttempt) {
   return sanitizeBranchName(`agencyos/${run.taskId.slice(0, 12)}-${run.id.slice(0, 8)}-a${attempt.number}`);
 }
 
+/**
+ * Prepares an isolated workspace for an execution attempt: clones the
+ * project's bound repository (shallow, single-branch), creates the attempt
+ * branch, records the base commit, and — when the previous attempt's
+ * workspace was rejected or needs revision — seeds its patch so revision work
+ * continues instead of restarting. Every git step runs as a recorded command
+ * for audit, and the workspace is failed on any error.
+ *
+ * @param input The run, the new attempt, the project, and an optional abort signal.
+ * @returns The workspace record in `ready` status (or the current record when
+ *   preparation already completed).
+ * @throws When the project has no bound repository, the provider or clone URL
+ *   is disallowed, or any preparation step fails.
+ */
 export async function prepareWorkspace(input: {
   run: ExecutionRun;
   attempt: ExecutionAttempt;
@@ -365,6 +380,19 @@ async function readPackageScriptCommands(repositoryPath: string): Promise<Record
   }
 }
 
+/**
+ * Builds the bounded repository snapshot given to the worker agent: an
+ * inventory of tracked/untracked files, the full text of the most
+ * task-relevant files (ranked by keyword score, capped in count and bytes,
+ * binaries excluded), detected package manager, and the baseline package.json
+ * script definitions that later decide which validation scripts are trusted.
+ *
+ * @param workspace The prepared workspace to snapshot.
+ * @param task The task whose text drives relevance ranking.
+ * @param signal Optional abort signal.
+ * @returns The repository context.
+ * @throws When the inventory command fails or the abort signal fires.
+ */
 export async function buildRepositoryContext(workspace: WorkspaceRecord, task: Task, signal?: AbortSignal): Promise<RepositoryContext> {
   const config = env();
   const list = requireCommandSuccess(await runRecordedCommand({
@@ -478,6 +506,20 @@ async function collectDiff(workspace: WorkspaceRecord, signal?: AbortSignal) {
   return { changedFiles: [...new Set(changedFiles)], additions, deletions, diff, diffTruncated };
 }
 
+/**
+ * Applies worker-proposed file changes to the workspace after policy
+ * validation. Create/update/delete semantics are enforced strictly (a create
+ * must not overwrite, an update/delete must target an existing file), then
+ * the resulting patch, change statistics, and change list are captured as the
+ * workspace's reviewable evidence. The workspace is failed on any error.
+ *
+ * @param workspace The ready workspace.
+ * @param changes Validated file changes proposed by the worker.
+ * @param signal Optional abort signal checked between file writes.
+ * @returns The workspace record with applied changes and captured diff.
+ * @throws When the changes violate policy, the workspace cannot accept
+ *   changes from its current state, or a filesystem/git step fails.
+ */
 export async function applyWorkspaceChanges(workspace: WorkspaceRecord, changes: WorkspaceFileChange[], signal?: AbortSignal) {
   validateFileChanges(changes);
   const applying = await workspaceRepository.markApplying(workspace.id, changes);
@@ -567,6 +609,10 @@ async function verifyValidationPatchStability(
   const currentHash = createHash("sha256").update(currentPatch.stdout).digest("hex");
   if (expectedHash === currentHash) return { unchanged: true, commands };
 
+  // Validation mutated the tree (build output, codegen, etc.). The reviewed
+  // patch is the only content allowed to survive validation, so the tree is
+  // reset to the base commit and the reviewed patch is reapplied verbatim.
+
   if (!workspace.baseSha || !workspace.patchPath) {
     throw new Error("Workspace is missing the patch evidence required for safe restoration");
   }
@@ -601,6 +647,24 @@ async function verifyValidationPatchStability(
   return { unchanged: false, commands };
 }
 
+/**
+ * Runs the workspace validation gate: optionally installs locked
+ * dependencies, then executes only the allowlisted validation scripts whose
+ * package.json definitions were not modified by the worker patch. Afterwards
+ * the repository patch is re-hashed and compared against the reviewed patch —
+ * validation must never mutate the change set under review; if it did, the
+ * reviewed patch is restored and validation counts as failed. The recorded
+ * commands and a machine-readable validation result are persisted on the
+ * workspace as authoritative QA evidence.
+ *
+ * @param workspace The workspace with applied changes.
+ * @param repositoryContext Baseline repository snapshot from before the changes.
+ * @param requestedScripts Scripts requested by the worker; defaults to the
+ *   whole allowlist when empty.
+ * @param signal Optional abort signal.
+ * @returns The validated workspace record and every recorded command.
+ * @throws When the workspace cannot enter validation or a required step fails.
+ */
 export async function validateWorkspace(
   workspace: WorkspaceRecord,
   repositoryContext: RepositoryContext,
@@ -725,6 +789,14 @@ export async function validateWorkspace(
   }
 }
 
+/**
+ * Appends control-plane-produced evidence artifacts (the verified patch and
+ * the validation command log) to the worker's self-reported output, so QA
+ * judges authoritative records rather than worker claims.
+ *
+ * @param input Worker output plus the validated workspace and its commands.
+ * @returns Worker output with the evidence artifacts appended (capped at 20).
+ */
 export function enrichWorkerOutput(input: {
   output: WorkerOutput;
   workspace: WorkspaceRecord;
@@ -777,6 +849,15 @@ export function enrichWorkerOutput(input: {
   };
 }
 
+/**
+ * Assembles the authoritative evidence package handed to the QA agent for a
+ * workspace-mode attempt: patch text, change statistics, validation outcome,
+ * and bounded command transcripts.
+ *
+ * @param workspace The validated workspace.
+ * @param commands Commands recorded during validation.
+ * @returns The evidence object embedded in the QA prompt.
+ */
 export function workspaceEvidenceForQa(workspace: WorkspaceRecord, commands: WorkspaceCommand[]) {
   return {
     workspaceId: workspace.id,
@@ -802,6 +883,19 @@ export function workspaceEvidenceForQa(workspace: WorkspaceRecord, commands: Wor
   };
 }
 
+/**
+ * Commits and pushes a human-approved local workspace branch. Before any
+ * push, the on-disk working tree is re-diffed against the base commit and
+ * hash-compared with the stored approved patch — content that changed after
+ * review must go through a new QA and approval cycle instead of being
+ * published. Git hooks are disabled for commit and push.
+ *
+ * @param workspace The approved workspace.
+ * @param commitMessage Commit message (truncated to 220 characters).
+ * @returns The published commit SHA.
+ * @throws When the workspace is not approved, has no changes, its contents
+ *   drifted from the approved patch, or any git step fails.
+ */
 export async function publishWorkspaceBranch(workspace: WorkspaceRecord, commitMessage: string) {
   if (workspace.status !== "approved" || workspace.reviewStatus !== "approved") {
     throw new Error("Workspace must be human-approved before it can be published");
@@ -890,6 +984,14 @@ export async function publishWorkspaceBranch(workspace: WorkspaceRecord, commitM
   return sha;
 }
 
+/**
+ * Computes a content fingerprint over the workspace's base commit, patch, and
+ * branch name. Used in idempotency keys so a re-proposed publish collapses
+ * unless the reviewed content actually changed.
+ *
+ * @param workspace The workspace to fingerprint.
+ * @returns SHA-256 hex digest of the workspace's identifying content.
+ */
 export function workspaceFingerprint(workspace: WorkspaceRecord) {
   return createHash("sha256")
     .update(`${workspace.baseSha ?? ""}\n${workspace.diff}\n${workspace.branchName}`)

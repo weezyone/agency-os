@@ -9,6 +9,13 @@ import {
   normalizeRepositoryCloneUrl,
 } from "@/services/workspace-policy";
 
+/**
+ * Repository binding endpoint: attaches a git repository to a project of the
+ * caller's tenant. The clone URL is normalized and validated against the
+ * workspace policy allowlist before binding.
+ */
+
+/** Bind a repository to a project. Requires `project:write`; 404 for an unknown project, 400 on invalid input. */
 export async function PUT(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "project:write");

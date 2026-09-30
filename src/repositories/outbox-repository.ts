@@ -6,6 +6,8 @@ import { getDb, listCollectionIndexes } from "@/lib/mongodb";
 import { lazyAsync } from "@/lib/lazy-async";
 import type { ClaimedOutboxMessage, OutboxMessage, OutboxTopic } from "@/schemas/outbox";
 
+// Lease tokens are persisted only as SHA-256 hashes: read access to the
+// outbox collection must not be enough to hijack an in-flight delivery.
 function hashToken(token: string) {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
@@ -32,7 +34,28 @@ const collections = lazyAsync(async () => {
   return { outbox };
 });
 
+/**
+ * Tenant-scoped transactional outbox.
+ *
+ * Producers append messages inside the same MongoDB transaction as their state
+ * change, so an event is never published without the state it describes (and
+ * vice versa). Runners claim messages under hashed lease tokens; delivery is
+ * at-least-once and consumers must stay idempotent.
+ */
 export const outboxRepository = {
+  /**
+   * Appends an outbox message idempotently on `(tenantId, idempotencyKey)`.
+   *
+   * The upsert with `$setOnInsert` means retries and duplicate events converge
+   * on the first accepted message rather than double-publishing.
+   *
+   * @param input - Topic, aggregate linkage, idempotency/correlation keys,
+   *   payload, and optional queue/delivery-budget overrides.
+   * @param session - Optional transaction session; pass the producer's session
+   *   so the message commits atomically with the state change.
+   * @returns The existing or newly persisted message.
+   * @throws {Error} If the upserted message cannot be read back.
+   */
   async append(input: {
     tenantId?: string;
     topic: OutboxTopic;
@@ -78,6 +101,16 @@ export const outboxRepository = {
     return message;
   },
 
+  /**
+   * Atomically claims the oldest deliverable message in the runner's queues.
+   *
+   * The single find-and-modify guarantees exactly one winner across competing
+   * runners; the delivery-count guard in the filter stops claims once the
+   * retry budget is spent so poison messages rest in dead letter.
+   *
+   * @param input - Runner identity, subscribed queues, and lease duration.
+   * @returns The claimed message with its plaintext lease token (never persisted), or null when empty.
+   */
   async claimNext(input: { runnerId: string; queues: string[]; leaseMs: number }): Promise<ClaimedOutboxMessage | null> {
     const { outbox } = await collections();
     const now = new Date();
@@ -104,6 +137,15 @@ export const outboxRepository = {
     return message ? { message, leaseToken } : null;
   },
 
+  /**
+   * Extends a delivery lease, fenced by owner, token hash, and expiry.
+   *
+   * @param id - Message id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @param leaseMs - Extension duration in milliseconds.
+   * @returns The updated message, or null when the lease is no longer valid.
+   */
   async heartbeat(id: string, runnerId: string, leaseToken: string, leaseMs: number) {
     const { outbox } = await collections();
     const now = new Date();
@@ -120,6 +162,17 @@ export const outboxRepository = {
     );
   },
 
+  /**
+   * Confirms the caller still holds a valid delivery lease on the message.
+   *
+   * Runners check this before committing a delivery's side effects; null means
+   * the lease was lost (reaped or taken over) and the attempt must abort.
+   *
+   * @param id - Message id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @returns The leased message when the guard holds, otherwise null.
+   */
   async assertLease(id: string, runnerId: string, leaseToken: string) {
     const { outbox } = await collections();
     return outbox.findOne({
@@ -131,6 +184,17 @@ export const outboxRepository = {
     }, { projection: { _id: 0 } });
   },
 
+  /**
+   * Marks a leased message as successfully delivered.
+   *
+   * The fenced filter ensures only the current lease holder can complete, so a
+   * stale runner's late success cannot hide a retry already handed to another.
+   *
+   * @param id - Message id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @returns The completed message, or null when the lease guard does not hold.
+   */
   async complete(id: string, runnerId: string, leaseToken: string) {
     const { outbox } = await collections();
     const now = new Date();
@@ -151,6 +215,13 @@ export const outboxRepository = {
     );
   },
 
+  /**
+   * Fails a delivery attempt, rescheduling with backoff while the delivery
+   * budget lasts and moving to dead letter once it is exhausted.
+   *
+   * @param input - Message id, lease credentials, error, and retry delay.
+   * @returns The rescheduled or dead-lettered message, or null when the lease guard does not hold.
+   */
   async fail(input: { id: string; runnerId: string; leaseToken: string; error: string; retryDelayMs: number }) {
     const { outbox } = await collections();
     const current = await outbox.findOne({
@@ -172,6 +243,16 @@ export const outboxRepository = {
     );
   },
 
+  /**
+   * Recovers messages whose delivery lease expired (runner crashed mid-delivery).
+   *
+   * Each recovery re-matches on the still-leased, still-expired state so a
+   * heartbeat racing the scan keeps ownership. Expired messages retry
+   * immediately until the delivery budget is spent, then dead-letter.
+   *
+   * @param limit - Maximum messages recovered per pass.
+   * @returns The messages actually recovered by this pass.
+   */
   async reapExpired(limit = 100) {
     const { outbox } = await collections();
     const now = new Date();
@@ -195,6 +276,9 @@ export const outboxRepository = {
     return recovered;
   },
 
+  /**
+   * @returns Message counts by delivery state for the current tenant.
+   */
   async summary() {
     const { outbox } = await collections();
     const [pending, leased, retryWait, deadLetter] = await Promise.all([

@@ -7,6 +7,12 @@ function safeFilename(filename: string) {
   return filename.replace(/[\r\n"\\/]+/g, "-").slice(0, 160) || "artifact.bin";
 }
 
+/**
+ * Artifact download endpoint, scoped to the caller's tenant. Streams the stored
+ * bytes as an attachment with content-type, ETag (sha256), and nosniff headers.
+ */
+
+/** Download an artifact's content. Requires `artifact:read`; 404 when the artifact does not exist. */
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     await requirePrincipal(request, "artifact:read");

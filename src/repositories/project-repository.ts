@@ -39,7 +39,12 @@ function projectStatusForTasks(tasks: Task[]): ProjectStatus {
   return "planning";
 }
 
+/** Tenant-scoped store for clients, projects, and tasks. */
 export const projectRepository = {
+  /**
+   * @param input - Client fields except id, tenantId, and timestamps.
+   * @returns The created client.
+   */
   async createClient(input: Omit<Client, "id" | "tenantId" | "createdAt" | "updatedAt">) {
     const { clients } = await collections();
     const now = new Date();
@@ -48,6 +53,10 @@ export const projectRepository = {
     return client;
   },
 
+  /**
+   * @param input - Project fields except id, tenantId, and timestamps.
+   * @returns The created project.
+   */
   async createProject(input: Omit<Project, "id" | "tenantId" | "createdAt" | "updatedAt">) {
     const { projects } = await collections();
     const now = new Date();
@@ -56,6 +65,10 @@ export const projectRepository = {
     return project;
   },
 
+  /**
+   * @param inputs - Task fields except id, tenantId, run linkage, and timestamps.
+   * @returns The created tasks (empty input short-circuits to an empty array).
+   */
   async createTasks(inputs: Array<Omit<Task, "id" | "tenantId" | "createdAt" | "updatedAt">>) {
     const { tasks } = await collections();
     const tenantId = currentTenantId();
@@ -73,6 +86,10 @@ export const projectRepository = {
     return docs;
   },
 
+  /**
+   * @param id - Project id within the current tenant.
+   * @returns The project with its tasks (creation order), or null when not found.
+   */
   async getProject(id: string) {
     const { projects, tasks } = await collections();
     const project = await projects.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -84,11 +101,19 @@ export const projectRepository = {
     return { project, tasks: projectTasks };
   },
 
+  /**
+   * @param id - Task id within the current tenant.
+   * @returns The task, or null when not found.
+   */
   async getTask(id: string) {
     const { tasks } = await collections();
     return tasks.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param id - Task id within the current tenant.
+   * @returns The task with its project and sibling tasks, or null when not found.
+   */
   async getTaskContext(id: string) {
     const { projects, tasks } = await collections();
     const task = await tasks.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -101,11 +126,20 @@ export const projectRepository = {
     return { project, task, tasks: projectTasks };
   },
 
+  /**
+   * @param limit - Maximum projects returned.
+   * @returns Tenant projects, most recently updated first.
+   */
   async listProjects(limit = 25) {
     const { projects } = await collections();
     return projects.find(tenantFilter(), { projection: { _id: 0 } }).sort({ updatedAt: -1 }).limit(limit).toArray();
   },
 
+  /**
+   * @param projectId - Project id within the current tenant.
+   * @param repository - Repository binding to set on the project.
+   * @returns The updated project, or null when not found.
+   */
   async bindRepository(projectId: string, repository: RepositoryBinding) {
     const { projects } = await collections();
     return projects.findOneAndUpdate(
@@ -115,6 +149,16 @@ export const projectRepository = {
     );
   },
 
+  /**
+   * Atomically moves a task between statuses; the `from` guard makes
+   * concurrent transitions safe (only the first writer matches).
+   *
+   * @param id - Task id within the current tenant.
+   * @param from - Status or statuses the task may currently be in.
+   * @param to - Target status.
+   * @param patch - Additional fields applied with the transition.
+   * @returns The updated task, or null when the guard did not match.
+   */
   async transitionTask(id: string, from: TaskStatus | TaskStatus[], to: TaskStatus, patch: Partial<Task> = {}) {
     const { tasks } = await collections();
     const allowed = Array.isArray(from) ? from : [from];
@@ -125,6 +169,11 @@ export const projectRepository = {
     );
   },
 
+  /**
+   * @param id - Task id within the current tenant.
+   * @param patch - Fields to merge into the task.
+   * @returns The updated task, or null when not found.
+   */
   async patchTask(id: string, patch: Partial<Task>) {
     const { tasks } = await collections();
     return tasks.findOneAndUpdate(
@@ -134,6 +183,12 @@ export const projectRepository = {
     );
   },
 
+  /**
+   * Recomputes and stores the project's rollup status from its tasks.
+   *
+   * @param projectId - Project id within the current tenant.
+   * @returns The updated project, or null when not found.
+   */
   async refreshProjectStatus(projectId: string) {
     const { projects, tasks } = await collections();
     const projectTasks = await tasks.find(tenantFilter({ projectId }), { projection: { _id: 0 } }).toArray();

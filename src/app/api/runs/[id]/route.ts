@@ -6,6 +6,12 @@ import { getExecutionDetail } from "@/services/execution-service";
 import { listRunArtifacts } from "@/services/artifact-service";
 import { publicExecutionJob } from "@/services/execution-job-public";
 
+/**
+ * Run detail endpoint, scoped to the caller's tenant. Returns execution detail
+ * plus sanitized jobs and run artifacts.
+ */
+
+/** Get a run's detail, jobs, and artifacts. Requires `control:read`; 404 when the run does not exist. */
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     await requirePrincipal(request, "control:read");

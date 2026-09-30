@@ -9,6 +9,13 @@ import { workspaceProcessProvider } from "@/workspaces/provider";
 
 export const runtime = "nodejs";
 
+/**
+ * Liveness/readiness probe. Shallow mode (default) is public and returns build
+ * version only; `?deep=1` requires `metrics:read` and checks MongoDB, runner,
+ * outbox, storage, and sandbox health.
+ */
+
+/** Shallow: 200 `{status:"ok"}`. Deep: 200 or 503 when degraded (pending work with no online runners, or storage/sandbox unavailable). */
 export async function GET(request: Request) {
   const checkedAt = new Date();
   try {

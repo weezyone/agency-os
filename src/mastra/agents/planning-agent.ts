@@ -2,6 +2,11 @@ import { Agent } from "@mastra/core/agent";
 import { agencyMemory } from "@/mastra/memory";
 import { env } from "@/lib/env";
 
+/**
+ * Delivery planner agent: turns an approved intake analysis into an executable
+ * plan of phases and tasks with acceptance criteria. Its structured output is
+ * parsed as `PlanningOutput` (src/schemas/planning.ts) by the intake service.
+ */
 export const planningAgent = new Agent({
   id: "planning-agent",
   name: "Agency Delivery Planner",

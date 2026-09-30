@@ -14,10 +14,28 @@ function canonicalize(value: unknown): unknown {
   return value instanceof Date ? value.toISOString() : value;
 }
 
+/**
+ * Serializes a value deterministically (sorted object keys, ISO dates) so the
+ * same logical statement always produces the same bytes — a precondition for
+ * reproducible HMAC signatures over provenance statements.
+ *
+ * @param value Arbitrary JSON-compatible value.
+ * @returns The canonical JSON string.
+ */
 export function canonicalJson(value: unknown) {
   return JSON.stringify(canonicalize(value));
 }
 
+/**
+ * Builds an in-toto-style provenance statement binding a run/attempt and its
+ * execution environment to the SHA-256 digests of every artifact it produced,
+ * signed with the tenant's HMAC key. Returns `null` when no provenance secret
+ * is configured, so provenance is strictly opt-in rather than silently unsigned.
+ *
+ * @param input Run/attempt identity, runner and sandbox metadata, and the
+ *   artifact subjects to attest.
+ * @returns The statement plus its signature, or `null` when unconfigured.
+ */
 export function createProvenanceAttestation(input: {
   runId: string;
   attemptId: string;

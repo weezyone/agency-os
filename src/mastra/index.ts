@@ -12,6 +12,11 @@ import {
   techLeadAgent,
 } from "@/mastra/agents/worker-agents";
 
+/**
+ * Root Mastra instance for AgencyOS. Registers every agent (intake, planning,
+ * project manager, specialist workers, and the quality gate) under the ids
+ * services and API routes use to invoke them.
+ */
 export const mastra = new Mastra({
   agents: {
     intakeAgent,

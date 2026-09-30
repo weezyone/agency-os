@@ -3,6 +3,11 @@ import { apiError } from "@/lib/http";
 import { requirePrincipal } from "@/lib/authorization";
 import { retryAction } from "@/services/action-service";
 
+/**
+ * Action retry endpoint for the caller's tenant.
+ */
+
+/** Requeue a failed action. Requires `action:propose`. */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "action:propose");

@@ -3,6 +3,11 @@ import { apiError } from "@/lib/http";
 import { requirePrincipal } from "@/lib/authorization";
 import { createMember, listMembers } from "@/services/identity-service";
 
+/**
+ * Admin member management for the caller's tenant.
+ */
+
+/** List tenant members. Requires `admin:members`. */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "admin:members");
@@ -12,6 +17,7 @@ export async function GET(request: Request) {
   }
 }
 
+/** Create a tenant member directly (outside the invitation flow). Requires `admin:members`; returns 201. */
 export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request, "admin:members");

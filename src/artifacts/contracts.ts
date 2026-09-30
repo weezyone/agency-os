@@ -1,3 +1,4 @@
+/** Result of persisting an artifact: where it lives and how to verify it. */
 export type StoredArtifact = {
   storageKey: string;
   storageUri: string;
@@ -5,6 +6,7 @@ export type StoredArtifact = {
   sha256: string;
 };
 
+/** Storage backend for durable run evidence (filesystem or S3-compatible). */
 export interface ArtifactStore {
   readonly name: "filesystem" | "s3";
   put(storageKey: string, content: Buffer, metadata?: { contentType?: string; sha256?: string }): Promise<StoredArtifact>;

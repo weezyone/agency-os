@@ -9,6 +9,10 @@ import { proposeProjectProvisioning, proposeLinearTaskSync } from "@/services/pr
 import { queueReadyTasks, queueTaskRun } from "@/services/execution-service";
 import { proposeWorkspacePublish } from "@/services/workspace-review-service";
 
+/**
+ * Read-only tool: returns the project record and its task plan. The PM agent
+ * is instructed to call this before making status claims or recommendations.
+ */
 export const getProjectTool = createTool({
   id: "get-project-truth",
   description: "Read the current project record and task plan from AgencyOS. Use this before making status claims or recommendations.",
@@ -26,6 +30,10 @@ export const getProjectTool = createTool({
   },
 });
 
+/**
+ * Read-only tool: returns a project's proposed external actions and their
+ * status-change events. Never performs a write.
+ */
 export const getProjectActionsTool = createTool({
   id: "get-project-actions",
   description: "Read controlled external-action proposals and their current statuses for a project. This never performs a write.",
@@ -34,6 +42,11 @@ export const getProjectActionsTool = createTool({
   execute: async ({ projectId }) => actionRepository.listProjectActivity(projectId),
 });
 
+/**
+ * Read-only tool: returns execution runs, attempts, QA results, workspaces,
+ * command evidence, and events for a project, merged from the execution and
+ * workspace repositories.
+ */
 export const getProjectRunsTool = createTool({
   id: "get-project-execution-runs",
   description: "Read worker runs, attempts, QA results, workspaces, command evidence, and execution events. Use this before claiming work passed QA or was approved.",
@@ -55,6 +68,11 @@ export const getProjectRunsTool = createTool({
   },
 });
 
+/**
+ * Creates approval-required proposals to create the Linear project and a
+ * private GitHub repository for a project. Only proposes; approval and
+ * execution remain with human operators.
+ */
 export const proposeProjectProvisioningTool = createTool({
   id: "propose-project-provisioning",
   description: "Prepare approval-required Linear project and private GitHub repository actions for a project. This only proposes actions; it never approves or executes them.",
@@ -63,6 +81,10 @@ export const proposeProjectProvisioningTool = createTool({
   execute: async ({ projectId }) => proposeProjectProvisioning(projectId, "project-manager-agent"),
 });
 
+/**
+ * Creates approval-required proposals to mirror every AgencyOS task as a
+ * Linear issue, given the id of the succeeded Linear project-creation action.
+ */
 export const proposeLinearTaskSyncTool = createTool({
   id: "propose-linear-task-sync",
   description: "After a Linear project creation action has succeeded, prepare approval-required Linear issue proposals for every AgencyOS task. This does not approve or execute them.",
@@ -75,6 +97,11 @@ export const proposeLinearTaskSyncTool = createTool({
     proposeLinearTaskSync(projectId, linearProjectActionId, "project-manager-agent"),
 });
 
+/**
+ * Queues a durable execution run assigning one task to a specialist worker,
+ * with optional role and execution-mode overrides. Queuing starts nothing and
+ * spends no attempt budget; a separate executor starts attempts.
+ */
 export const queueTaskRunTool = createTool({
   id: "queue-task-run",
   description: "Assign one AgencyOS task to a specialized worker and place it in the durable execution queue. Queuing does not execute the worker or spend the attempt budget.",
@@ -88,6 +115,10 @@ export const queueTaskRunTool = createTool({
     queueTaskRun(taskId, { requestedBy: "project-manager-agent", assignedRole, executionMode }),
 });
 
+/**
+ * Creates an approval-required proposal to push a human-approved workspace to
+ * GitHub as a branch plus (by default draft) pull request.
+ */
 export const proposeWorkspacePublishTool = createTool({
   id: "propose-workspace-publish",
   description: "Prepare an approval-required GitHub branch push and draft pull request for a human-approved workspace. This only proposes the external action.",
@@ -101,6 +132,10 @@ export const proposeWorkspacePublishTool = createTool({
   execute: async ({ runId, ...input }) => proposeWorkspacePublish(runId, input, "project-manager-agent"),
 });
 
+/**
+ * Queues every dependency-ready project task that has no active run; tasks
+ * that are not ready are reported in `skipped` with their blocking reasons.
+ */
 export const queueReadyTasksTool = createTool({
   id: "queue-ready-project-tasks",
   description: "Queue every dependency-ready task that has no active run. This prepares internal work but does not execute any worker or QA model call.",
@@ -109,6 +144,7 @@ export const queueReadyTasksTool = createTool({
   execute: async ({ projectId }) => queueReadyTasks(projectId, "project-manager-agent"),
 });
 
+/** Tool bundle granted to the project manager agent. */
 export const projectManagerTools = {
   getProject: getProjectTool,
   getProjectActions: getProjectActionsTool,

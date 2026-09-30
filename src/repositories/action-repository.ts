@@ -15,6 +15,7 @@ import type {
 } from "@/schemas/actions";
 import type { ActionPolicyDecision } from "@/schemas/policy";
 
+/** Identity of the principal proposing, approving, or executing an action. */
 export type ActionActor = {
   actorId: string;
   principalId: string | null;
@@ -117,7 +118,27 @@ async function appendEvent(
   return record;
 }
 
+/**
+ * Tenant-scoped store for governed actions and their audit events.
+ *
+ * Every state change is appended to `action_events` and mirrored into the
+ * transactional outbox (`domain.event` topic) inside the same MongoDB
+ * transaction, so downstream consumers never observe a state whose event was
+ * lost (or vice versa).
+ */
 export const actionRepository = {
+  /**
+   * Creates a proposed action idempotently on `(tenantId, idempotencyKey)`.
+   *
+   * @param input - Action kind and payload proposed for governance.
+   * @param actor - Principal proposing the action.
+   * @param idempotencyKey - Caller-supplied key; repeats return the original record.
+   * @param policyDecision - Policy evaluation snapshot recorded on the action.
+   * @param risk - Assessed risk tier recorded on the action.
+   * @param correlationId - Optional trace id; a fresh one is generated when omitted.
+   * @returns The existing or newly created action record.
+   * @throws {Error} If the upserted record cannot be read back.
+   */
   async propose(
     input: ProposedAction,
     actor: ActionActor,
@@ -180,11 +201,19 @@ export const actionRepository = {
     });
   },
 
+  /**
+   * @param id - Action id within the current tenant.
+   * @returns The action record, or null when not found.
+   */
   async get(id: string) {
     const { actions } = await collections();
     return actions.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param id - Action id within the current tenant.
+   * @returns The action with its chronological audit events, or null when not found.
+   */
   async getWithEvents(id: string) {
     const { actions, events } = await collections();
     const action = await actions.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -193,11 +222,19 @@ export const actionRepository = {
     return { action, events: history };
   },
 
+  /**
+   * @param limit - Maximum number of actions, newest first.
+   * @param status - Optional status filter.
+   * @returns Tenant actions ordered by creation date descending.
+   */
   async list(limit = 50, status?: ActionStatus) {
     const { actions } = await collections();
     return actions.find(tenantFilter(status ? { status } : {}), { projection: { _id: 0 } }).sort({ createdAt: -1 }).limit(limit).toArray();
   },
 
+  /**
+   * @returns Per-status counts plus the number of proposed actions still short of approval quorum.
+   */
   async summary() {
     const { actions } = await collections();
     const statuses: ActionStatus[] = ["proposed", "approved", "rejected", "executing", "succeeded", "failed"];
@@ -211,6 +248,10 @@ export const actionRepository = {
     return { counts, awaitingApproval };
   },
 
+  /**
+   * @param projectId - Project whose actions and events should be listed.
+   * @returns Project actions (newest first) and up to 200 of their latest events.
+   */
   async listProjectActivity(projectId: string) {
     const { actions, events } = await collections();
     const projectActions = await actions.find(
@@ -226,6 +267,16 @@ export const actionRepository = {
     return { actions: projectActions, events: projectEvents };
   },
 
+  /**
+   * Records an approval and promotes the action to "approved" once quorum is met.
+   *
+   * @param id - Action id within the current tenant.
+   * @param approval - Approval details including role and principal.
+   * @param actorId - Audit actor id; defaults to the approving principal.
+   * @returns The updated (or unchanged, when already settled/duplicated) action, or null when not found.
+   * @throws {Error} If the action is not in "proposed" status, the role is not
+   *   permitted by policy, or separation of duties is violated.
+   */
   async recordApproval(id: string, approval: ActionApproval, actorId = `user:${approval.principalId}`) {
     const { actions } = await collections();
     return withMongoTransaction(async (session) => {
@@ -275,6 +326,19 @@ export const actionRepository = {
     });
   },
 
+  /**
+   * Atomically moves an action between statuses, writing the audit event in the same transaction.
+   *
+   * The status guard in the filter makes the transition safe against concurrent
+   * writers: only one can observe a matching `from` status.
+   *
+   * @param id - Action id within the current tenant.
+   * @param from - Status or statuses the action may currently be in.
+   * @param to - Target status.
+   * @param patch - Additional fields applied with the transition.
+   * @param audit - Event appended to the action history on success.
+   * @returns The updated action, or null when the guard did not match.
+   */
   async transition(
     id: string,
     from: ActionStatus | ActionStatus[],
@@ -295,6 +359,11 @@ export const actionRepository = {
     });
   },
 
+  /**
+   * @param id - Action id within the current tenant.
+   * @param error - Execution error message to record.
+   * @returns The updated action, or null unless it is currently executing.
+   */
   async updateExecutionError(id: string, error: string) {
     const { actions } = await collections();
     return actions.findOneAndUpdate(
@@ -304,6 +373,20 @@ export const actionRepository = {
     );
   },
 
+  /**
+   * Enqueues an approved action for execution via the "external-actions" outbox queue.
+   *
+   * The outbox message and the "executing" status flip commit in one
+   * transaction, so a crash cannot lose the delivery or execute twice from one
+   * approval. The idempotency key embeds `approvedAt` so a re-approval after
+   * rejection produces a new delivery rather than colliding with the old one.
+   *
+   * @param id - Action id within the current tenant.
+   * @param actor - Principal requesting execution.
+   * @returns The action now in "executing", the unchanged record when already
+   *   executing/succeeded, or null when not found.
+   * @throws {Error} If the action has not been approved.
+   */
   async queueExecution(id: string, actor: ActionActor) {
     const { actions } = await collections();
     return withMongoTransaction(async (session) => {

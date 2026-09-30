@@ -6,6 +6,12 @@ import { proposeAction } from "@/services/action-service";
 
 const bodySchema = z.object({ action: z.unknown() });
 
+/**
+ * Action proposal endpoint. Creates a pending action for the caller's tenant;
+ * the action must subsequently be approved before it can execute.
+ */
+
+/** Propose a new action. Requires `action:propose`; honors the `idempotency-key` header. Returns 201 with the created action. */
 export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request, "action:propose");

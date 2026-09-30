@@ -4,6 +4,12 @@ import { requirePrincipal } from "@/lib/authorization";
 import { executionJobRepository } from "@/repositories/execution-job-repository";
 import { publicExecutionJob } from "@/services/execution-job-public";
 
+/**
+ * Execution-job read endpoint, scoped to the caller's tenant. The job payload
+ * is sanitized via publicExecutionJob before being returned.
+ */
+
+/** Get an execution job's detail. Requires `control:read`; 404 when the job does not exist. */
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     await requirePrincipal(request, "control:read");

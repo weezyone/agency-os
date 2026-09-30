@@ -69,6 +69,8 @@ function mountTarget(request: CommandRequest) {
   if (!request.mountRoot) throw new Error("Docker sandbox commands require a mount root");
   const root = path.resolve(request.mountRoot);
   const workspaceRoot = path.resolve(env().AGENCY_WORKSPACE_ROOT);
+  // The bind-mounted directory must stay inside the configured workspace root;
+  // otherwise a crafted mountRoot could expose arbitrary host paths to the sandbox.
   const workspaceRelative = path.relative(workspaceRoot, root);
   if (workspaceRelative.startsWith("..") || path.isAbsolute(workspaceRelative)) {
     throw new Error("Sandbox mount root escapes the configured workspace root");
@@ -85,6 +87,8 @@ function mountTarget(request: CommandRequest) {
   const source = configuredHostRoot
     ? path.resolve(configuredHostRoot, workspaceRelative)
     : root;
+  // Commas and newlines would let a path break out of the --mount flag's
+  // comma-separated syntax and inject additional mount options.
   if ([root, source].some((value) => value.includes(",") || value.includes("\n"))) {
     throw new Error("Sandbox mount path contains unsupported characters");
   }
@@ -181,6 +185,21 @@ async function removeContainer(name: string) {
   }).catch(() => undefined);
 }
 
+/**
+ * Builds the `docker run` argument vector for a sandboxed command.
+ *
+ * Enforces the sandbox contract: only allowlisted package-manager executables,
+ * no network unless configured, read-only `.git`, capped CPU/memory/pids, an
+ * unprivileged user, and optional capability dropping / no-new-privileges.
+ * The `.git` directory is mounted read-only so sandboxed commands can inspect
+ * history but cannot rewrite it.
+ *
+ * @param request - Command to sandbox; must have `isolation: "sandbox"`.
+ * @param containerName - Pre-generated unique container name.
+ * @param expiresAt - Unix seconds after which orphan cleanup may remove the container.
+ * @returns The docker arguments, resolved resource limits, and mount mapping.
+ * @throws {Error} If the executable is not allowlisted or the mount escapes the workspace root.
+ */
 export function buildDockerRunArguments(
   request: CommandRequest,
   containerName: string,
@@ -232,6 +251,14 @@ export function buildDockerRunArguments(
   return { args, limits, mounted };
 }
 
+/**
+ * Workspace provider that runs sandboxed commands in throwaway Docker containers.
+ *
+ * Containers are labeled with their scope and expiry so `terminateScope` and
+ * `cleanupOrphans` can reclaim them even if this process dies. Disk quota is
+ * enforced by polling the mounted workspace size: `docker run` has no native
+ * bind-mount quota, so a workspace that exceeds `diskBytes` is force-removed.
+ */
 export const dockerIsolatedProvider: WorkspaceProcessProvider = {
   name: "docker-isolated",
 
@@ -248,6 +275,9 @@ export const dockerIsolatedProvider: WorkspaceProcessProvider = {
     let forcedTeardown = false;
     let finished = false;
     let quotaCheckInFlight = false;
+    // Docker cannot quota a bind mount, so poll workspace size and kill the
+    // container when it exceeds the budget. `quotaCheckInFlight` prevents
+    // overlapping directory walks from stacking up on large trees.
     const quotaWatch = setInterval(() => {
       if (finished || quotaCheckInFlight) return;
       quotaCheckInFlight = true;

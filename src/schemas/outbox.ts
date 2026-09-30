@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+/**
+ * Transactional outbox contracts.
+ *
+ * Messages are written in the same transaction as the state change that
+ * produced them, then leased and delivered with bounded retries until they
+ * succeed or dead-letter. Persisted by the outbox repository; the
+ * `action.execute` topic drives external action execution.
+ */
 export const outboxTopicSchema = z.enum(["action.execute", "domain.event"]);
 export const outboxStatusSchema = z.enum([
   "pending",
@@ -35,4 +43,5 @@ export const outboxMessageSchema = z.object({
 export type OutboxTopic = z.infer<typeof outboxTopicSchema>;
 export type OutboxStatus = z.infer<typeof outboxStatusSchema>;
 export type OutboxMessage = z.infer<typeof outboxMessageSchema>;
+/** A leased message plus the raw lease token the holder needs to complete or release it. */
 export type ClaimedOutboxMessage = { message: OutboxMessage; leaseToken: string };

@@ -12,6 +12,17 @@ function slugify(value: string) {
     .slice(0, 90);
 }
 
+/**
+ * Proposes the two external provisioning actions for a project (Linear
+ * project, private GitHub repository). Deterministic per-project idempotency
+ * keys make re-running this safe: duplicate proposals collapse onto the
+ * already proposed actions instead of creating duplicates.
+ *
+ * @param projectId Project to provision.
+ * @param requestedBy Requesting principal or agent actor id.
+ * @returns The project and the two proposed action records.
+ * @throws When the project does not exist or policy denies a proposal.
+ */
 export async function proposeProjectProvisioning(projectId: string, requestedBy: string | Principal = "pm-agent") {
   const bundle = await projectRepository.getProject(projectId);
   if (!bundle) throw new Error("Project not found");
@@ -43,6 +54,19 @@ export async function proposeProjectProvisioning(projectId: string, requestedBy:
   return { project: bundle.project, actions: [linear, github] };
 }
 
+/**
+ * Proposes one `linear.createIssue` action per project task, targeting the
+ * Linear project created by an earlier provisioning action. The source action
+ * must have succeeded so its external id is known; per-task idempotency keys
+ * keep repeated sync proposals from duplicating issues.
+ *
+ * @param projectId Project whose tasks should be synced.
+ * @param linearProjectActionId Identifier of the succeeded `linear.createProject` action.
+ * @param requestedBy Requesting principal or agent actor id.
+ * @returns The project and the proposed issue-creation actions.
+ * @throws When the project or source action does not exist, the source action
+ *   has not succeeded, or its result lacks the Linear project id.
+ */
 export async function proposeLinearTaskSync(projectId: string, linearProjectActionId: string, requestedBy: string | Principal = "pm-agent") {
   const bundle = await projectRepository.getProject(projectId);
   if (!bundle) throw new Error("Project not found");

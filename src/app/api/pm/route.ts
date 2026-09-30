@@ -11,6 +11,12 @@ const bodySchema = z.object({
   projectId: z.string().min(1),
 });
 
+/**
+ * Project-manager chat endpoint: relays a message to the Mastra project-manager
+ * agent with tenant- and project-scoped memory, then records token usage.
+ */
+
+/** Chat with the PM agent for a project. Requires `project:write`; usage-accounting failures are logged, not fatal. */
 export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request, "project:write");

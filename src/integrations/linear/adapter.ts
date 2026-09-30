@@ -1,6 +1,10 @@
 import { linearIntegrationConfig } from "@/services/integration-secret-service";
 import { linearGraphql } from "./client";
 
+/**
+ * {@link ProjectSystemAdapter} backed by the Linear GraphQL API. The team and
+ * credentials resolve per tenant through the integration secret service.
+ */
 export const linearAdapter = {
   async createProject(input: { name: string; description: string }) {
     const { teamId } = await linearIntegrationConfig();

@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { tenantRepository } from "@/repositories/tenant-repository";
 
+/** Invitation acceptance page: verifies the `?token=` invitation server-side, then links into the OIDC start flow. */
 export default async function InvitePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const params = await searchParams;
   const token = typeof params.token === "string" ? params.token : "";

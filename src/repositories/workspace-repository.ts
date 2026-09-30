@@ -98,7 +98,17 @@ async function reviewTransition(
   return workspace;
 }
 
+/**
+ * Tenant-scoped store for execution workspaces, their commands, and audit events.
+ *
+ * One workspace exists per attempt (unique on `(tenantId, attemptId)`). Review
+ * transitions are status-guarded find-and-modify operations so concurrent
+ * reviewers/actors cannot double-approve or approve a stale state.
+ */
 export const workspaceRepository = {
+  /**
+   * @returns Per-status workspace counts plus the count pending human review.
+   */
   async summary() {
     const { workspaces } = await collections();
     const statuses: WorkspaceRecord["status"][] = [
@@ -111,6 +121,15 @@ export const workspaceRepository = {
     return { counts, reviewPending: counts.review_required };
   },
 
+  /**
+   * Creates a workspace in "preparing", idempotent per attempt.
+   *
+   * The unique `(tenantId, attemptId)` index makes concurrent preparation
+   * converge on one record; the duplicate-key path re-reads the winner.
+   *
+   * @param input - Workspace fields except server-managed status/diff/review state.
+   * @returns The existing or newly created workspace.
+   */
   async create(input: Omit<WorkspaceRecord,
     | "id"
     | "tenantId"
@@ -190,16 +209,31 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * @param id - Workspace id within the current tenant.
+   * @returns The workspace record, or null when not found.
+   */
   async get(id: string) {
     const { workspaces } = await collections();
     return workspaces.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param runId - Run id within the current tenant.
+   * @returns The run's most recent workspace, or null when none exists.
+   */
   async latestForRun(runId: string) {
     const { workspaces } = await collections();
     return workspaces.find(tenantFilter({ runId }), { projection: { _id: 0 } }).sort({ createdAt: -1 }).limit(1).next();
   },
 
+  /**
+   * Finds the run's previous workspace, used to seed a new attempt from prior state.
+   *
+   * @param runId - Run id within the current tenant.
+   * @param excludeWorkspaceId - Workspace to skip (typically the current one).
+   * @returns The latest matching workspace, or null when none exists.
+   */
   async previousForRun(runId: string, excludeWorkspaceId?: string) {
     const { workspaces } = await collections();
     return workspaces
@@ -209,6 +243,10 @@ export const workspaceRepository = {
       .next();
   },
 
+  /**
+   * @param id - Workspace id within the current tenant.
+   * @returns The workspace with its commands and chronological events, or null when not found.
+   */
   async getDetail(id: string) {
     const { workspaces, commands, events } = await collections();
     const workspace = await workspaces.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -220,6 +258,10 @@ export const workspaceRepository = {
     return { workspace, commands: workspaceCommands, events: workspaceEvents };
   },
 
+  /**
+   * @param projectId - Project id within the current tenant.
+   * @returns Up to 100 recent project workspaces with their latest commands and events.
+   */
   async listProject(projectId: string) {
     const { workspaces, commands, events } = await collections();
     const projectWorkspaces = await workspaces
@@ -237,6 +279,13 @@ export const workspaceRepository = {
     return { workspaces: projectWorkspaces, commands: projectCommands, workspaceEvents: projectEvents };
   },
 
+  /**
+   * Marks a prepared workspace as ready, recording its base commit and patch location.
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param input - Base SHA, patch artifact path, and optional seed source workspace.
+   * @returns The ready workspace, or null when it left "preparing" concurrently.
+   */
   async markReady(id: string, input: { baseSha: string; patchPath: string; seededFromWorkspaceId?: string | null }) {
     const { workspaces } = await collections();
     const now = new Date();
@@ -258,6 +307,13 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Marks a ready workspace as applying and records the requested file changes.
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param changes - The changes the worker was asked to apply.
+   * @returns The updated workspace, or null when it is not in "ready".
+   */
   async markApplying(id: string, changes: WorkspaceFileChange[]) {
     const { workspaces } = await collections();
     return workspaces.findOneAndUpdate(
@@ -267,6 +323,14 @@ export const workspaceRepository = {
     );
   },
 
+  /**
+   * Records the applied diff and returns the workspace to "ready".
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param input - Applied changes, changed file list, diff stats, and the diff
+   *   (flagged when truncated to storage limits).
+   * @returns The updated workspace, or null when it is not in "applying".
+   */
   async markChangesApplied(id: string, input: {
     appliedChanges: WorkspaceFileChange[];
     changedFiles: string[];
@@ -294,6 +358,10 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * @param id - Workspace id within the current tenant.
+   * @returns The workspace now in "validating", or null when it is not in "ready".
+   */
   async markValidationStarted(id: string) {
     const { workspaces } = await collections();
     const workspace = await workspaces.findOneAndUpdate(
@@ -314,6 +382,13 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Stores the validation outcome and returns the workspace to "ready".
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param validation - Validation result (executed/skipped/changed scripts, pass flag).
+   * @returns The updated workspace, or null when it is not in "validating".
+   */
   async markValidationCompleted(id: string, validation: WorkspaceValidationResult) {
     const { workspaces } = await collections();
     const workspace = await workspaces.findOneAndUpdate(
@@ -339,14 +414,36 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Principal requesting revision.
+   * @param reason - Human-readable revision reason.
+   * @returns The workspace now in "revision_required", or null when not in "ready"/"validating".
+   */
   async markRevisionRequired(id: string, actor: string, reason: string) {
     return reviewTransition(id, ["ready", "validating"], "revision_required", "revision_required", actor, reason);
   },
 
+  /**
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Entity flagging the workspace for human review.
+   * @returns The workspace now in "review_required", or null when not in "ready".
+   */
   async markReviewRequired(id: string, actor: string) {
     return reviewTransition(id, ["ready"], "review_required", "review_required", actor);
   },
 
+  /**
+   * Approves a workspace pending review.
+   *
+   * The `reviewStatus: "pending"` guard makes approval single-shot: a second
+   * reviewer (or a retry) cannot re-approve or flip a decided review.
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Reviewing principal.
+   * @param reason - Optional approval note.
+   * @returns The approved workspace, or null when not pending review.
+   */
   async approve(id: string, actor: string, reason?: string) {
     const { workspaces } = await collections();
     const now = new Date();
@@ -361,6 +458,14 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Rejects a workspace pending review (single-shot, like {@link workspaceRepository.approve}).
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Reviewing principal.
+   * @param reason - Rejection reason.
+   * @returns The rejected workspace, or null when not pending review.
+   */
   async reject(id: string, actor: string, reason: string) {
     const { workspaces } = await collections();
     const now = new Date();
@@ -375,6 +480,13 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Records that publishing an approved workspace has begun.
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Entity performing the publish.
+   * @returns The approved workspace, or null when not approved.
+   */
   async markPublishStarted(id: string, actor: string) {
     const { workspaces } = await collections();
     const workspace = await workspaces.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -383,6 +495,15 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Records the published commit and pull request on an approved workspace.
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Entity performing the publish.
+   * @param commitSha - Published commit SHA.
+   * @param pullRequestUrl - URL of the opened pull request.
+   * @returns The updated workspace, or null when not in "approved".
+   */
   async markPublished(id: string, actor: string, commitSha: string, pullRequestUrl: string) {
     const { workspaces } = await collections();
     const workspace = await workspaces.findOneAndUpdate(
@@ -396,6 +517,14 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Records a publish failure without changing workspace status (retry stays possible).
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Entity that attempted the publish.
+   * @param failure - Failure description.
+   * @returns The workspace with the failure event appended, or null when not found.
+   */
   async markPublishFailed(id: string, actor: string, failure: string) {
     const { workspaces } = await collections();
     const workspace = await workspaces.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -411,6 +540,15 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Marks a workspace as failed; approved and cleaned workspaces are terminal
+   * and cannot be failed.
+   *
+   * @param id - Workspace id within the current tenant.
+   * @param actor - Entity reporting the failure.
+   * @param failure - Failure description.
+   * @returns The failed workspace, or null when terminal or not found.
+   */
   async fail(id: string, actor: string, failure: string) {
     const { workspaces } = await collections();
     const workspace = await workspaces.findOneAndUpdate(
@@ -424,6 +562,12 @@ export const workspaceRepository = {
     return workspace;
   },
 
+  /**
+   * Records a command as running against a workspace.
+   *
+   * @param input - Command fields except server-managed result/runtime state.
+   * @returns The inserted command record.
+   */
   async startCommand(input: Omit<WorkspaceCommand,
     | "id"
     | "tenantId"
@@ -464,6 +608,19 @@ export const workspaceRepository = {
     return command;
   },
 
+  /**
+   * Stores a command's outcome and derives its terminal status.
+   *
+   * Timeouts and quota overruns always yield a non-success status even when the
+   * process exit code was 0, because the result cannot be trusted once the
+   * sandbox contract was breached. The recorded `workspacePatchSha256` and
+   * `integrityViolation` let reviewers detect workspace tampering by comparing
+   * the sandbox-reported patch digest against the expected one.
+   *
+   * @param id - Command id within the current tenant.
+   * @param result - Provider-reported execution outcome.
+   * @returns The finished command, or null when it is not in "running".
+   */
   async finishCommand(id: string, result: Pick<WorkspaceCommand,
     | "exitCode"
     | "stdout"

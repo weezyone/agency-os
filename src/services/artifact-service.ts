@@ -74,6 +74,19 @@ async function storeArtifact(input: {
   });
 }
 
+/**
+ * Persists the durable evidence bundle for an execution run's latest attempt:
+ * worker output, QA result, workspace patch, command log, a manifest tying
+ * them together, and (when configured) an HMAC-signed provenance attestation
+ * covering every artifact digest. Storage keys are tenant-scoped and
+ * sanitized, and re-persisting an already stored kind is idempotent.
+ *
+ * @param runId Execution run whose latest attempt should be persisted.
+ * @param runnerId Runner identity recorded in the provenance attestation.
+ * @returns Public descriptors of the stored artifacts (empty when the run has
+ *   no attempts yet).
+ * @throws When the execution run does not exist.
+ */
 export async function persistExecutionArtifacts(runId: string, runnerId: string | null = null) {
   const detail = await executionRepository.getDetail(runId);
   if (!detail) throw new Error("Execution run not found");
@@ -201,10 +214,26 @@ export async function persistExecutionArtifacts(runId: string, runnerId: string 
   return artifacts.map(publicArtifact);
 }
 
+/**
+ * Lists the public descriptors of all artifacts stored for an execution run.
+ *
+ * @param runId Execution run identifier.
+ * @returns Public artifact descriptors, without storage internals.
+ */
 export async function listRunArtifacts(runId: string) {
   return (await artifactRepository.listRun(runId)).map(publicArtifact);
 }
 
+/**
+ * Reads an artifact's content from its storage provider after verifying the
+ * stored bytes against the recorded SHA-256 digest and size. Expired artifacts
+ * are treated as absent. Integrity is re-checked on every read because the
+ * stored digest is the anchor for QA review and publication decisions.
+ *
+ * @param id Artifact identifier.
+ * @returns The artifact record plus its content, or `null` when missing or expired.
+ * @throws When the stored content fails integrity verification.
+ */
 export async function readArtifact(id: string) {
   const artifact = await artifactRepository.get(id);
   if (!artifact) return null;
@@ -217,6 +246,14 @@ export async function readArtifact(id: string) {
   return { artifact, content };
 }
 
+/**
+ * Deletes expired artifacts across all tenants, removing the stored bytes
+ * before deleting the metadata record so a metadata-only orphan never exposes
+ * a dangling download.
+ *
+ * @param limit Maximum number of expired artifacts to remove in one pass.
+ * @returns The number of artifact records deleted.
+ */
 export async function cleanupExpiredArtifacts(limit = 100) {
   const expired = await artifactRepository.listExpiredAllTenants(new Date(), limit);
   let removed = 0;

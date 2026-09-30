@@ -4,6 +4,12 @@ import { apiError } from "@/lib/http";
 import { tenantRepository } from "@/repositories/tenant-repository";
 import { configureCurrentTenantOidc } from "@/services/tenant-service";
 
+/**
+ * OIDC connection configuration for the caller's tenant (issuer, client id,
+ * encrypted client secret, etc.).
+ */
+
+/** Get the tenant's OIDC connection configuration (secrets redacted). Requires `admin:tenant`. */
 export async function GET(request: Request) {
   try {
     const principal = await requirePrincipal(request, "admin:tenant");
@@ -14,6 +20,7 @@ export async function GET(request: Request) {
   }
 }
 
+/** Configure (create or replace) the tenant's OIDC connection. Requires `admin:tenant`. */
 export async function PUT(request: Request) {
   try {
     const principal = await requirePrincipal(request, "admin:tenant");

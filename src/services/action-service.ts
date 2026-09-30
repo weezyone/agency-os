@@ -23,6 +23,15 @@ function isPrincipal(value: string | Principal): value is Principal {
   return typeof value !== "string";
 }
 
+/**
+ * Normalizes a requester reference into the actor shape stored on action records.
+ * Principals contribute their member identity; plain strings are treated as
+ * system or agent actor ids with no principal link.
+ *
+ * @param value Requesting principal or opaque actor id (e.g. an agent name).
+ * @param displayName Display name used when `value` is a plain actor id.
+ * @returns The actor identity persisted on the action record.
+ */
 export function actionActor(value: string | Principal, displayName?: string): ActionActor {
   if (isPrincipal(value)) {
     return {
@@ -47,10 +56,31 @@ function requesterRole(value: string | Principal): MemberRole {
   return isPrincipal(value) ? value.role : "operator";
 }
 
+/**
+ * Derives a deterministic idempotency key from the action payload so that
+ * resubmitting an identical proposal collapses onto the existing action
+ * record instead of creating a duplicate external mutation.
+ *
+ * @param action The validated proposed action.
+ * @returns SHA-256 hex digest of the serialized action.
+ */
 export function defaultIdempotencyKey(action: ProposedAction) {
   return createHash("sha256").update(JSON.stringify(action)).digest("hex");
 }
 
+/**
+ * Validates and persists a proposed external action for the current tenant.
+ * The policy decision is evaluated at proposal time and snapshotted onto the
+ * action so that later approval and execution checks enforce the exact policy
+ * version that admitted the action, even if tenant policies change afterwards.
+ *
+ * @param input Raw proposal payload, parsed against `proposeActionSchema`.
+ * @param requestedBy Requesting principal or system actor id.
+ * @param suppliedKey Optional idempotency key; defaults to a content hash.
+ * @param options Correlation id and display name metadata.
+ * @returns The persisted action record in `proposed` status.
+ * @throws When the input fails schema validation or the active policy denies the action.
+ */
 export async function proposeAction(
   input: unknown,
   requestedBy: string | Principal,
@@ -75,6 +105,19 @@ export async function proposeAction(
   );
 }
 
+/**
+ * Records one principal's approval on an action. Approver-role, duplicate,
+ * separation-of-duties, and quorum checks are enforced atomically in the
+ * repository against the action's snapshotted policy decision, so concurrent
+ * approvers cannot over-count quorum and a requester cannot self-approve.
+ *
+ * @param id Action identifier.
+ * @param principal Approving principal.
+ * @returns The updated action record, or `null` when the action does not exist.
+ * @throws When the action is not approvable from its current status, the
+ *   principal's role may not approve, or the principal is the requester and
+ *   the policy requires a separate approver.
+ */
 export async function approveAction(id: string, principal: Principal) {
   return actionRepository.recordApproval(id, {
     principalId: principal.memberId ?? principal.id,
@@ -84,6 +127,15 @@ export async function approveAction(id: string, principal: Principal) {
   }, principalActor(principal));
 }
 
+/**
+ * Rejects a proposed or approved action, recording the reason for audit.
+ *
+ * @param id Action identifier.
+ * @param rejectedBy Rejecting principal or system actor id.
+ * @param reason Human-readable rejection reason.
+ * @returns The action record in `rejected` status.
+ * @throws When the action does not exist or is not in `proposed`/`approved` status.
+ */
 export async function rejectAction(id: string, rejectedBy: string | Principal, reason: string) {
   const actor = actionActor(rejectedBy);
   const action = await actionRepository.transition(
@@ -99,6 +151,18 @@ export async function rejectAction(id: string, rejectedBy: string | Principal, r
   throw new Error(`Action cannot be rejected from status ${current.status}`);
 }
 
+/**
+ * Re-proposes a failed or rejected action. A fresh policy decision is
+ * evaluated and snapshotted so retries cannot ride on a stale approval rule
+ * set, and all approval/execution state is cleared to restart the lifecycle.
+ *
+ * @param id Action identifier.
+ * @param requestedBy Requesting principal or system actor id.
+ * @returns The action record back in `proposed` status (or the current record
+ *   when it is already proposed).
+ * @throws When the action does not exist, is in a non-retryable status, or the
+ *   current policy denies re-proposal.
+ */
 export async function retryAction(id: string, requestedBy: string | Principal) {
   const actor = actionActor(requestedBy);
   const current = await actionRepository.get(id);
@@ -134,6 +198,19 @@ export async function retryAction(id: string, requestedBy: string | Principal) {
   return action;
 }
 
+/**
+ * Queues an approved action for asynchronous execution. The executor's role is
+ * checked against the snapshotted policy decision, then the status flip and
+ * the outbox message are committed in one transaction — the transactional
+ * outbox guarantees the external write is eventually delivered exactly once,
+ * even if this process crashes between the state change and any network call.
+ *
+ * @param id Action identifier.
+ * @param executedBy Executing principal or system actor id.
+ * @returns The action record in `executing` status.
+ * @throws When the action does not exist, is not approved, or the executor's
+ *   role is not permitted by the snapshotted policy.
+ */
 export async function executeAction(id: string, executedBy: string | Principal) {
   const current = await actionRepository.get(id);
   if (!current) throw new Error("Action not found");
@@ -189,6 +266,18 @@ async function applySuccessfulSideEffects(action: ActionRecord, result: Record<s
   if (!project) throw new Error("Project no longer exists for repository binding");
 }
 
+/**
+ * Performs the external side effect for an action in `executing` status via
+ * the matching integration adapter, applies any resulting control-plane
+ * bindings (e.g. linking a created repository to its project), and marks the
+ * action succeeded. Redelivery of an already-succeeded action is a no-op.
+ *
+ * @param actionId Action identifier from the outbox delivery.
+ * @param actor Runner identity recorded on the audit event.
+ * @returns The action record in `succeeded` status.
+ * @throws When the action does not exist, is not executing, the dispatch fails,
+ *   or the completion transition loses a state race.
+ */
 export async function processActionExecution(actionId: string, actor: string) {
   const action = await actionRepository.get(actionId);
   if (!action) throw new Error("Action not found");
@@ -208,6 +297,15 @@ export async function processActionExecution(actionId: string, actor: string) {
   return completed;
 }
 
+/**
+ * Marks an executing action as failed after its outbox delivery exhausted
+ * retries, so the action does not stay stuck in `executing` forever.
+ *
+ * @param actionId Action identifier.
+ * @param actor Runner or reaper identity recorded on the audit event.
+ * @param error Terminal failure message.
+ * @returns The updated action record, or `null` when the transition does not apply.
+ */
 export async function markActionExecutionDeadLetter(actionId: string, actor: string, error: string) {
   return actionRepository.transition(
     actionId,
@@ -218,6 +316,14 @@ export async function markActionExecutionDeadLetter(actionId: string, actor: str
   );
 }
 
+/**
+ * Records the latest execution error on an in-flight action without changing
+ * its status, so operators can see why the current delivery attempt failed.
+ *
+ * @param actionId Action identifier.
+ * @param error Failure message from the delivery attempt.
+ * @returns The updated action record, or `null` when the action is not executing.
+ */
 export async function recordActionExecutionError(actionId: string, error: string) {
   return actionRepository.updateExecutionError(actionId, error);
 }

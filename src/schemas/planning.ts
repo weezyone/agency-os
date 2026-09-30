@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { prioritySchema } from "@/schemas/domain";
 
+/**
+ * Structured output contract for the planning agent: delivery phases plus an
+ * executable task breakdown with acceptance criteria. Parsed from the agent's
+ * structured output and persisted as project tasks by the intake service.
+ */
 export const planningOutputSchema = z.object({
   phases: z.array(z.object({
     name: z.string(),

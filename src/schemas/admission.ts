@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+/**
+ * Admission-control contracts for execution capacity.
+ *
+ * A reservation holds quota units for a queued run until it is consumed on
+ * start or released on failure/cancel; usage buckets aggregate per-tenant,
+ * per-day reserved/consumed/released units against a daily limit. Enforced by
+ * the admission service and persisted via the admission repository.
+ */
 export const admissionReservationStatusSchema = z.enum(["reserved", "consumed", "released"]);
 
 export const admissionReservationSchema = z.object({

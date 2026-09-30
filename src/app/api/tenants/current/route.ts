@@ -4,6 +4,11 @@ import { apiError } from "@/lib/http";
 import { tenantRepository } from "@/repositories/tenant-repository";
 import { updateCurrentTenant } from "@/services/tenant-service";
 
+/**
+ * Current-tenant endpoints: read or update the tenant of the authenticated caller.
+ */
+
+/** Get the caller's tenant. Requires `control:read`; 404 when the tenant record is missing. */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "control:read");
@@ -15,6 +20,7 @@ export async function GET(request: Request) {
   }
 }
 
+/** Update the caller's tenant settings. Requires `admin:tenant`; 404 when the tenant record is missing. */
 export async function PATCH(request: Request) {
   try {
     await requirePrincipal(request, "admin:tenant");

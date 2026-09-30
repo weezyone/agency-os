@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { memberRoleSchema } from "@/schemas/identity";
 
+/**
+ * Tenant account contracts: organizations, membership invitations, and OIDC
+ * single-sign-on connections and login transactions.
+ *
+ * Input schemas are parsed at API boundaries and by the tenant service; record
+ * types are persisted by the tenant repository. Invitation tokens and OIDC
+ * login state are stored hashed or encrypted, never in plaintext.
+ */
 export const tenantStatusSchema = z.enum(["active", "suspended"]);
 
 export const tenantSchema = z.object({
@@ -70,6 +78,7 @@ export const configureOidcConnectionSchema = z.object({
   message: "OIDC scopes must include openid",
 });
 
+/** Short-lived record for an in-flight OIDC login (hashed state, encrypted PKCE verifier and nonce); consumed once on callback. */
 export const oidcTransactionSchema = z.object({
   id: z.string(),
   tenantId: z.string().min(1),

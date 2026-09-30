@@ -3,6 +3,12 @@ import { agencyMemory } from "@/mastra/memory";
 import { env } from "@/lib/env";
 import { projectManagerTools } from "@/mastra/tools/project-operations";
 
+/**
+ * Project manager and operating coordinator agent. Maintains project truth via
+ * `projectManagerTools` and may propose controlled external actions and queue
+ * worker runs; external writes stay gated on human approval and operator
+ * execution.
+ */
 export const projectManagerAgent = new Agent({
   id: "project-manager",
   name: "Agency Project Manager",

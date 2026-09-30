@@ -98,6 +98,24 @@ function sha256(value: Buffer | string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * Publishes a human-approved workspace to GitHub by reconstructing it from
+ * the immutable patch artifact. The workspace must be approved, the stored
+ * patch artifact must match the action's recorded SHA-256 digest, and the
+ * commit produced in a clean throwaway clone is hash-verified against that
+ * same digest — so exactly the bytes a human reviewed are what gets pushed,
+ * never whatever happens to be on some disk. Git runs with hooks disabled,
+ * an emptied credential helper, and no ambient git config. If the remote
+ * branch already contains the approved patch, the push is skipped and only
+ * the pull request is ensured, making republishing idempotent.
+ *
+ * @param rawPayload Raw publish payload, parsed against
+ *   `githubPublishWorkspacePayloadSchema`.
+ * @param actor Runner identity recorded on workspace publish events.
+ * @returns Publication identifiers: commit SHA, branch, and pull request URL.
+ * @throws When the workspace, artifact, or repository metadata fail any
+ *   consistency or integrity check, or any git/GitHub step fails.
+ */
 export async function publishApprovedWorkspace(rawPayload: unknown, actor = "distributed-action-runner") {
   const payload = githubPublishWorkspacePayloadSchema.parse(rawPayload);
   const workspace = await workspaceRepository.get(payload.workspaceId);
@@ -187,6 +205,8 @@ export async function publishApprovedWorkspace(rawPayload: unknown, actor = "dis
       await runGit({ args: ["checkout", "-b", payload.branchName, payload.baseSha], cwd: repositoryPath });
       await runGit({ args: ["apply", "--check", "--binary", "--whitespace=nowarn", patchPath], cwd: repositoryPath });
       await runGit({ args: ["apply", "--index", "--binary", "--whitespace=nowarn", patchPath], cwd: repositoryPath });
+      // Re-derive the patch from the staged tree and compare digests: the
+      // commit may only contain bytes identical to the human-approved artifact.
       const stagedPatch = await runGit({
         args: ["diff", "--cached", "--binary", "--no-ext-diff", payload.baseSha, "--", "."],
         cwd: repositoryPath,

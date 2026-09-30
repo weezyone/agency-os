@@ -162,6 +162,9 @@ function startLeaseControl(input: {
     }
   };
 
+  // A failed heartbeat renewal or an operator cancellation flag aborts the
+  // AbortController: only the current lease holder may durably finish a job,
+  // so in-flight work must stop the moment ownership is in doubt.
   const heartbeatTimer = setInterval(() => void heartbeat(), config.AGENCY_RUNNER_HEARTBEAT_MS);
   const controlTimer = setInterval(() => void pollControlState(), config.AGENCY_RUNNER_CONTROL_POLL_MS);
   unrefTimer(heartbeatTimer);
@@ -192,6 +195,17 @@ function createGuard(claimed: ClaimedExecutionJob, controller: AbortController):
   };
 }
 
+/**
+ * Reaps execution jobs whose runner leases expired, rescheduling retryable
+ * deliveries and dead-lettering exhausted ones. For each dead-lettered job
+ * the admission budget is settled and any attempt the dead runner left in
+ * `running`/`qa_review` is interrupted so the run cannot remain stuck in a
+ * state no live runner will ever finish.
+ *
+ * @param actor Reaper identity recorded on audit events.
+ * @param limit Maximum number of expired leases to reap and dead letters to reconcile.
+ * @returns The jobs whose leases were reaped.
+ */
 export async function recoverExpiredExecutionJobs(actor: string, limit = 200) {
   const recovered = await executionJobRepository.reapExpiredLeases({
     actor,
@@ -224,6 +238,19 @@ export async function recoverExpiredExecutionJobs(actor: string, limit = 200) {
   return recovered;
 }
 
+/**
+ * Manually retries a durable execution delivery. Retrying superseded
+ * deliveries is rejected because only the newest job for a run and the run's
+ * current attempt may still drive reconciliation — older deliveries must
+ * never resurrect stale attempts.
+ *
+ * @param jobId Execution job identifier.
+ * @param actor Operator identity recorded on the audit event.
+ * @returns The execution run and the requeued job.
+ * @throws When the job or run does not exist, the run is cancelled, the job
+ *   was superseded by a newer delivery or attempt, or the job's status does
+ *   not allow retry.
+ */
 export async function retryExecutionJob(jobId: string, actor: string) {
   const current = await executionJobRepository.get(jobId);
   if (!current) throw new Error("Execution job not found");
@@ -243,6 +270,18 @@ export async function retryExecutionJob(jobId: string, actor: string) {
   return { run, job };
 }
 
+/**
+ * Creates the durable execution job that delivers a queued (or
+ * revision-requested) run to a runner. An admission reservation is taken
+ * first so budget is fenced before the job exists; if enqueueing fails before
+ * the job persists, the reservation is released so units are not leaked.
+ *
+ * @param runId Execution run to enqueue.
+ * @param rawInput Raw enqueue options, parsed against `enqueueExecutionJobSchema`.
+ * @returns The run and its durable execution job.
+ * @throws When the run does not exist, is not enqueueable, admission limits
+ *   reject the attempt, or the reservation cannot be attached to the job.
+ */
 export async function enqueueExecutionRun(runId: string, rawInput: unknown = {}) {
   const input = enqueueExecutionJobSchema.parse(rawInput);
   const run = await executionRepository.get(runId);
@@ -293,6 +332,20 @@ export async function enqueueExecutionRun(runId: string, rawInput: unknown = {})
   }
 }
 
+/**
+ * Requests cancellation of an execution run. When a runner holds an active
+ * job the cancellation is signalled on that job (the runner aborts at its
+ * next lease checkpoint and reconciles); otherwise the run is cancelled
+ * directly from the control plane. The whole check races job state changes,
+ * so it retries once before giving up.
+ *
+ * @param runId Execution run to cancel.
+ * @param actor Operator identity recorded on audit events.
+ * @param reason Human-readable cancellation reason.
+ * @returns The cancelled run and the affected job, when one existed.
+ * @throws When the run does not exist, is already terminal, or its state
+ *   keeps changing during the request.
+ */
 export async function requestRunCancellation(runId: string, actor: string, reason: string) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const run = await executionRepository.get(runId);
@@ -426,6 +479,8 @@ async function processClaimedExecutionJobInTenant(
         runnerId,
         claimed.leaseToken,
       ).catch(() => null);
+      // If the lease is gone, another runner (or the reaper) owns the job now
+      // and its recorded state is authoritative; only the owner may fail it.
       if (!stillOwned) return currentJob;
       const interruptedRun = await executionRepository.get(started.runId).catch(() => null);
       const failed = await executionJobRepository.fail({
@@ -462,6 +517,18 @@ async function processClaimedExecutionJobInTenant(
   }
 }
 
+/**
+ * Processes one claimed execution job end to end: starts the lease, fences
+ * every stage behind lease assertions, recovers attempts abandoned by prior
+ * runners, drives the run to its target attempt, persists artifacts, and
+ * completes the delivery. Cancellation requests and lease loss abort the in-flight
+ * work instead of completing it, because only the lease holder may durably
+ * finish a job. Runs inside the job's tenant context.
+ *
+ * @param claimed The claimed job including its lease token.
+ * @param options Optional runner shutdown signal forwarded into the job.
+ * @returns The terminal job record (completed, failed, or acknowledged cancellation).
+ */
 export async function processClaimedExecutionJob(
   claimed: ClaimedExecutionJob,
   options: { shutdownSignal?: AbortSignal } = {},

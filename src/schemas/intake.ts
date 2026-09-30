@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+/**
+ * Intake pipeline contracts: `intakeRequestSchema` is the client-facing
+ * submission parsed at the intake API route; `intakeAnalysisSchema` is the
+ * structured output the intake agent must return, parsed by the intake
+ * service.
+ */
 export const intakeRequestSchema = z.object({
   companyName: z.string().min(2),
   contactName: z.string().min(2),

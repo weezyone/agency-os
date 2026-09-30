@@ -8,6 +8,15 @@ import { publicExecutionJob } from "@/services/execution-job-public";
 
 const bodySchema = z.object({ reason: z.string().trim().min(1) });
 
+/**
+ * Execution-job cancellation endpoint, scoped to the caller's tenant.
+ */
+
+/**
+ * Cancel a run via its currently active execution job. Requires `run:cancel` and a
+ * non-empty reason; 404 for an unknown job, 409 when the job is not the active
+ * delivery, and 202 while the job is still leased/running.
+ */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "run:cancel");

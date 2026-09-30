@@ -5,6 +5,7 @@ import { identityRepository } from "@/repositories/identity-repository";
 import { tenantRepository } from "@/repositories/tenant-repository";
 import type { MemberRole, Permission, Principal } from "@/schemas/identity";
 
+/** Thrown when a request carries no valid credential or the tenant is suspended. */
 export class AuthenticationRequiredError extends Error {
   constructor(message = "Authentication required") {
     super(message);
@@ -12,6 +13,7 @@ export class AuthenticationRequiredError extends Error {
   }
 }
 
+/** Thrown when an authenticated principal lacks a required permission. */
 export class PermissionDeniedError extends Error {
   constructor(message = "Permission denied") {
     super(message);
@@ -19,6 +21,7 @@ export class PermissionDeniedError extends Error {
   }
 }
 
+/** Thrown when double-submit CSRF validation fails for a session-authenticated mutation. */
 export class CsrfValidationError extends Error {
   constructor(message = "CSRF validation failed") {
     super(message);
@@ -49,6 +52,8 @@ function digest(value: string) {
   return createHash("sha256").update(value, "utf8").digest();
 }
 
+// Hashing before comparison keeps timingSafeEqual safe for arbitrary-length
+// inputs (it throws on length mismatch) and avoids leaking token length.
 function constantEqual(left: string, right: string) {
   return timingSafeEqual(digest(left), digest(right));
 }
@@ -95,16 +100,34 @@ async function assertTenantActive(tenantId: string) {
   if (!tenant) throw new AuthenticationRequiredError("Tenant is suspended or unavailable");
 }
 
+/**
+ * Returns a copy of the permission set granted to a tenant member role.
+ *
+ * @param role - Tenant membership role.
+ * @returns Mutable copy so callers cannot corrupt the shared role table.
+ */
 export function permissionsForRole(role: MemberRole) {
   return [...ROLE_PERMISSIONS[role]];
 }
 
+/**
+ * Builds the stable audit actor string for a principal, distinguishing real
+ * tenant members from pre-auth bootstrap identities.
+ *
+ * @param principal - Authenticated principal.
+ */
 export function principalActor(principal: Principal) {
   return principal.memberId
     ? `tenant:${principal.tenantId}:user:${principal.memberId}`
     : `tenant:${principal.tenantId}:bootstrap:${principal.id}`;
 }
 
+/**
+ * Projects a principal into the shape safe to expose over the API, dropping
+ * internal fields such as keyId and sessionId.
+ *
+ * @param principal - Authenticated principal.
+ */
 export function publicPrincipal(principal: Principal) {
   return {
     id: principal.id,
@@ -118,6 +141,16 @@ export function publicPrincipal(principal: Principal) {
   };
 }
 
+/**
+ * Resolves the request credential into a principal and activates its tenant
+ * context for the rest of the async execution. Checks, in order: disabled
+ * auth (development only), bootstrap owner token, database-backed API key,
+ * then browser session cookie.
+ *
+ * @param request - Incoming HTTP request.
+ * @returns The authenticated principal with tenant context entered.
+ * @throws {AuthenticationRequiredError} When no credential validates or the tenant is suspended.
+ */
 export async function authenticateRequest(request: Request): Promise<Principal> {
   const config = env();
   if (config.AGENCY_AUTH_MODE === "disabled") {
@@ -194,6 +227,9 @@ export async function authenticateRequest(request: Request): Promise<Principal> 
   throw new AuthenticationRequiredError();
 }
 
+// Double-submit CSRF: cookie-bearing session mutations must echo the CSRF
+// cookie in a header, and the token must still be valid server-side. API-key
+// and bootstrap callers are immune to browser CSRF and skip this.
 async function assertCsrf(request: Request, principal: Principal) {
   if (principal.authMethod !== "session" || !principal.sessionId) return;
   if (["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) return;
@@ -208,6 +244,17 @@ async function assertCsrf(request: Request, principal: Principal) {
   }
 }
 
+/**
+ * Authenticates the request, enforces CSRF on session mutations, and
+ * optionally requires a permission. Route handlers should call this first.
+ *
+ * @param request - Incoming HTTP request.
+ * @param permission - Permission the principal must hold, if any.
+ * @returns The authenticated, authorized principal.
+ * @throws {AuthenticationRequiredError} When authentication fails.
+ * @throws {CsrfValidationError} When CSRF validation fails.
+ * @throws {PermissionDeniedError} When the principal lacks the permission.
+ */
 export async function requirePrincipal(request: Request, permission?: Permission) {
   const principal = await authenticateRequest(request);
   await assertCsrf(request, principal);

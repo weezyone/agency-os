@@ -4,6 +4,12 @@ import { apiError } from "@/lib/http";
 import { usageRepository } from "@/repositories/usage-repository";
 import { configurePrice } from "@/services/usage-service";
 
+/**
+ * Price-catalog management for the caller's tenant: unit prices used for usage
+ * accounting and cost rollups.
+ */
+
+/** List configured prices. Requires `admin:pricing`. */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "admin:pricing");
@@ -13,6 +19,7 @@ export async function GET(request: Request) {
   }
 }
 
+/** Configure a price entry. Requires `admin:pricing`; returns 201. */
 export async function PUT(request: Request) {
   try {
     const principal = await requirePrincipal(request, "admin:pricing");

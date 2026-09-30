@@ -3,6 +3,12 @@ import { publicPrincipal, requirePrincipal } from "@/lib/authorization";
 import { apiError } from "@/lib/http";
 import { tenantRepository } from "@/repositories/tenant-repository";
 
+/**
+ * Session bootstrap endpoint: returns the authenticated principal plus the
+ * current tenant record, used by the UI to hydrate after login.
+ */
+
+/** Get the caller's principal and tenant. Requires `control:read`. */
 export async function GET(request: Request) {
   try {
     const principal = await requirePrincipal(request, "control:read");

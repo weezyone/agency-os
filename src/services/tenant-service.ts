@@ -41,6 +41,18 @@ function requestIp(request: Request) {
     ?? null;
 }
 
+/**
+ * Creates a tenant, its owner membership, and the initial owner API key in a
+ * single MongoDB transaction so a tenant can never exist without an owner who
+ * can authenticate. The plaintext key token is returned exactly once; only
+ * its hash is persisted.
+ *
+ * @param input Raw tenant payload, parsed against `createTenantSchema`.
+ * @param principal Platform principal performing the provisioning.
+ * @param owner Email and display name of the initial tenant owner.
+ * @returns The tenant, owner membership, and the one-time initial API key.
+ * @throws When the input fails schema validation or the transaction aborts.
+ */
 export async function createTenant(input: unknown, principal: Principal, owner: { email: string; displayName: string }) {
   const parsed = createTenantSchema.parse(input);
   const actor = principalActor(principal);
@@ -81,10 +93,27 @@ export async function createTenant(input: unknown, principal: Principal, owner: 
   });
 }
 
+/**
+ * Updates mutable settings of the current tenant.
+ *
+ * @param input Raw update payload, parsed against `updateTenantSchema`.
+ * @returns The updated tenant record.
+ * @throws When the input fails schema validation.
+ */
 export async function updateCurrentTenant(input: unknown) {
   return tenantRepository.updateCurrent(updateTenantSchema.parse(input));
 }
 
+/**
+ * Invites a new member to the current tenant by email. The response carries
+ * the plaintext invitation token and a ready-to-share accept URL; only the
+ * token hash is persisted.
+ *
+ * @param input Raw invitation payload, parsed against `createTenantInvitationSchema`.
+ * @param principal Principal recorded as the inviter.
+ * @returns The invitation (without its token hash), the accept URL, and the token.
+ * @throws When the input is invalid or the email already belongs to a member.
+ */
 export async function inviteTenantMember(input: unknown, principal: Principal) {
   const invitationInput = createTenantInvitationSchema.parse(input);
   const existing = await identityRepository.getMemberByEmail(invitationInput.email);
@@ -97,6 +126,16 @@ export async function inviteTenantMember(input: unknown, principal: Principal) {
   };
 }
 
+/**
+ * Configures OIDC single sign-on for the current tenant. The issuer is
+ * validated against SSRF/allowlist policy, and the client secret is stored in
+ * the tenant secret vault — the connection record keeps only its reference id.
+ *
+ * @param input Raw connection payload, parsed against `configureOidcConnectionSchema`.
+ * @param principal Principal recorded as the configurer.
+ * @returns The updated tenant OIDC connection.
+ * @throws When the input or issuer fails validation.
+ */
 export async function configureCurrentTenantOidc(input: unknown, principal: Principal) {
   const parsed = configureOidcConnectionSchema.parse(input);
   const issuer = validateOidcIssuer(parsed.issuer);
@@ -114,6 +153,16 @@ export async function configureCurrentTenantOidc(input: unknown, principal: Prin
   }, principalActor(principal));
 }
 
+/**
+ * Starts an OIDC authorization-code-with-PKCE login for a tenant. The PKCE
+ * verifier and nonce are stored encrypted in a short-lived transaction record
+ * — never in the browser — and an optional invitation token is bound to the
+ * transaction so the callback can only accept that invitation.
+ *
+ * @param input Tenant slug, optional invitation token, and post-login return path.
+ * @returns The provider redirect URL, tenant, and transaction expiry.
+ * @throws When the tenant, invitation, or OIDC configuration is missing or invalid.
+ */
 export async function beginOidcLogin(input: {
   tenantSlug: string;
   invitationToken?: string | null;
@@ -163,6 +212,18 @@ export async function beginOidcLogin(input: {
   return { redirect, tenant, expiresAt };
 }
 
+/**
+ * Completes an OIDC login from the provider callback: consumes the stored
+ * transaction exactly once, verifies state/nonce/PKCE against the token
+ * response, enforces the tenant's email-domain allowlist and (when enabled)
+ * verified-email requirement, and creates or refreshes the member from the
+ * claims before issuing a browser session. Invited identities must match the
+ * invitation's email, so an invitation cannot be claimed by a different person.
+ *
+ * @param request The incoming callback request from the OIDC provider.
+ * @returns The new browser session, tenant, member, and sanitized return path.
+ * @throws When the transaction, claims, invitation, or membership checks fail.
+ */
 export async function completeOidcLogin(request: Request) {
   const currentUrl = new URL(request.url);
   const state = currentUrl.searchParams.get("state");
@@ -242,6 +303,12 @@ export async function completeOidcLogin(request: Request) {
   );
 }
 
+/**
+ * Generates a fresh 256-bit tenant encryption key, base64-encoded for storage
+ * in platform configuration.
+ *
+ * @returns A base64-encoded 32-byte random key.
+ */
 export function randomTenantEncryptionKey() {
   return randomBytes(32).toString("base64");
 }
