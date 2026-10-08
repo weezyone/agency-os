@@ -59,6 +59,14 @@ function terminate(child: ChildProcess) {
   unrefTimer(killTimer);
 }
 
+/**
+ * Workspace provider that runs commands as child processes on the runner host.
+ *
+ * Only suitable for trusted workloads: there is no isolation beyond a scrubbed
+ * environment, so callers must request `isolation: "sandbox"` for untrusted work
+ * and use a sandbox-capable provider instead. Output is capped per stream and
+ * timeout/abort escalation goes SIGTERM, then SIGKILL after 2 seconds.
+ */
 export const localProcessProvider: WorkspaceProcessProvider = {
   name: "local-process",
   run(request: CommandRequest) {

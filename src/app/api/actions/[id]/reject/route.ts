@@ -6,6 +6,11 @@ import { rejectAction } from "@/services/action-service";
 
 const bodySchema = z.object({ reason: z.string().trim().min(1) });
 
+/**
+ * Action rejection endpoint for the caller's tenant.
+ */
+
+/** Reject a pending action with a mandatory reason. Requires `action:approve` (reviewer authority). */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "action:approve");

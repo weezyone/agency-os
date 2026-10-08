@@ -44,6 +44,9 @@ function hash(value: string) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+// Token comparisons are timing-safe so an attacker cannot recover a stored
+// hash incrementally by measuring response latency. The length check comes
+// first because timingSafeEqual throws on mismatched lengths.
 function safeHexEqual(left: string, right: string) {
   const a = Buffer.from(left, "hex");
   const b = Buffer.from(right, "hex");
@@ -60,7 +63,19 @@ function invitationId(token: string) {
   return /^aoi_([0-9a-f-]{36})_[A-Za-z0-9_-]+$/i.exec(token.trim())?.[1] ?? null;
 }
 
+/**
+ * Store for tenants, invitations, and OIDC connections/transactions.
+ *
+ * Invitation tokens and OIDC state values are persisted only as SHA-256
+ * hashes, so a database leak discloses neither usable invite links nor
+ * in-flight login state.
+ */
 export const tenantRepository = {
+  /**
+   * Creates the single-tenant bootstrap tenant from environment config if absent.
+   *
+   * @returns The existing or newly created bootstrap tenant.
+   */
   async ensureBootstrapTenant() {
     const { tenants } = await collections();
     const tenantId = env().AGENCY_TENANT_ID;
@@ -87,6 +102,12 @@ export const tenantRepository = {
     }
   },
 
+  /**
+   * @param input - Tenant fields (slug, display name, allowed email domains).
+   * @param createdBy - Actor id recorded as creator.
+   * @param session - Optional MongoDB transaction session.
+   * @returns The created tenant.
+   */
   async create(input: CreateTenantInput, createdBy: string, session?: ClientSession) {
     const { tenants } = await collections();
     const now = new Date();
@@ -104,26 +125,48 @@ export const tenantRepository = {
     return tenant;
   },
 
+  /**
+   * @returns The tenant of the current context, or null when it does not exist.
+   */
   async getCurrent() {
     const { tenants } = await collections();
     return tenants.findOne({ id: currentTenantId() }, { projection: { _id: 0 } });
   },
 
+  /**
+   * @param id - Tenant id; must match the current tenant context.
+   * @returns The tenant, or null when not found.
+   */
   async getById(id: string) {
     const { tenants } = await collections();
     return tenants.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * Looks up an active tenant by slug without requiring a tenant context
+   * (used during sign-in, before any context exists).
+   *
+   * @param slug - Tenant slug, normalized to lowercase.
+   * @returns The active tenant, or null when not found.
+   */
   async getBySlug(slug: string) {
     const { tenants } = await collections();
     return tenants.findOne({ slug: slug.trim().toLowerCase(), status: "active" }, { projection: { _id: 0 } });
   },
 
+  /**
+   * @param id - Tenant id, without requiring a matching tenant context.
+   * @returns The tenant when it exists and is active, otherwise null.
+   */
   async getActiveById(id: string) {
     const { tenants } = await collections();
     return tenants.findOne({ id, status: "active" }, { projection: { _id: 0 } });
   },
 
+  /**
+   * @param input - Fields to update on the current tenant.
+   * @returns The updated tenant, or null when the current tenant does not exist.
+   */
   async updateCurrent(input: UpdateTenantInput) {
     const { tenants } = await collections();
     return tenants.findOneAndUpdate(
@@ -133,6 +176,14 @@ export const tenantRepository = {
     );
   },
 
+  /**
+   * Points the current tenant at a policy version; called inside the policy
+   * activation transaction so the pointer never disagrees with policy status.
+   *
+   * @param policyId - Policy id to make active.
+   * @param session - Optional MongoDB transaction session.
+   * @returns The updated tenant, or null when it does not exist.
+   */
   async setActivePolicy(policyId: string, session?: ClientSession) {
     const { tenants } = await collections();
     return tenants.findOneAndUpdate(
@@ -142,6 +193,14 @@ export const tenantRepository = {
     );
   },
 
+  /**
+   * Creates an email invitation to join the current tenant.
+   *
+   * @param input - Invitee email, role, and expiry in hours.
+   * @param invitedBy - Member id of the inviter.
+   * @returns The stored invitation plus the plaintext token, shared with the
+   *   invitee exactly once (only its hash is persisted).
+   */
   async createInvitation(input: CreateTenantInvitationInput, invitedBy: string) {
     const { invitations } = await collections();
     const credential = invitationCredential();
@@ -163,11 +222,24 @@ export const tenantRepository = {
     return { invitation, token: credential.token };
   },
 
+  /**
+   * @returns The tenant's invitations without token hashes, newest first.
+   */
   async listInvitations() {
     const { invitations } = await collections();
     return invitations.find(tenantFilter(), { projection: { _id: 0, tokenHash: 0 } }).sort({ createdAt: -1 }).toArray();
   },
 
+  /**
+   * Verifies an invitation token without consuming it.
+   *
+   * Lookup is by the id embedded in the token, then timing-safe hash
+   * comparison of the secret; revoked, accepted, and expired invitations all
+   * return null so callers cannot probe invitation states.
+   *
+   * @param token - The `aoi_...` invitation token.
+   * @returns The valid pending invitation, otherwise null.
+   */
   async verifyInvitation(token: string) {
     const id = invitationId(token);
     if (!id) return null;
@@ -177,6 +249,16 @@ export const tenantRepository = {
     return safeHexEqual(invitation.tokenHash, hash(token)) ? invitation : null;
   },
 
+  /**
+   * Marks an invitation as accepted exactly once.
+   *
+   * The filter requires it to be unaccepted, unrevoked, and unexpired, so two
+   * concurrent acceptances cannot both succeed against one invitation.
+   *
+   * @param id - Invitation id within the current tenant.
+   * @param memberId - Member created by accepting the invitation.
+   * @returns The accepted invitation (token hash omitted), or null when no longer acceptable.
+   */
   async acceptInvitation(id: string, memberId: string) {
     const { invitations } = await collections();
     return invitations.findOneAndUpdate(
@@ -186,6 +268,10 @@ export const tenantRepository = {
     );
   },
 
+  /**
+   * @param id - Invitation id within the current tenant.
+   * @returns The revoked invitation (token hash omitted), or null when not pending.
+   */
   async revokeInvitation(id: string) {
     const { invitations } = await collections();
     return invitations.findOneAndUpdate(
@@ -195,6 +281,16 @@ export const tenantRepository = {
     );
   },
 
+  /**
+   * Creates or replaces the tenant's single OIDC connection.
+   *
+   * The client secret is never stored here — `clientSecretId` references an
+   * envelope-encrypted entry in the secret repository.
+   *
+   * @param input - Issuer, client id, scopes, and the secret reference id.
+   * @param createdBy - Actor id recorded as creator on first configuration.
+   * @returns The stored connection.
+   */
   async configureOidc(input: Omit<ConfigureOidcConnectionInput, "clientSecret"> & { clientSecretId: string }, createdBy: string) {
     const { oidcConnections, tenants } = await collections();
     const now = new Date();
@@ -216,11 +312,24 @@ export const tenantRepository = {
     return connection;
   },
 
+  /**
+   * @param tenantId - Tenant whose OIDC connection should be loaded.
+   * @returns The active connection, or null when OIDC is not configured.
+   */
   async getOidcForTenant(tenantId: string) {
     const { oidcConnections } = await collections();
     return oidcConnections.findOne({ tenantId, status: "active" }, { projection: { _id: 0 } });
   },
 
+  /**
+   * Persists an in-flight OIDC login (PKCE verifier, nonce, return target).
+   *
+   * Only the hash of `state` is stored, so leaked rows cannot be used to
+   * correlate or complete someone else's login. Rows self-delete via TTL.
+   *
+   * @param input - Transaction fields plus the plaintext `state` to hash.
+   * @returns The created transaction record.
+   */
   async createOidcTransaction(input: Omit<OidcTransaction, "id" | "createdAt" | "consumedAt"> & { state: string }) {
     const { oidcTransactions } = await collections();
     const now = new Date();
@@ -241,6 +350,17 @@ export const tenantRepository = {
     return record;
   },
 
+  /**
+   * Consumes an OIDC transaction atomically, returning its pre-consumption state.
+   *
+   * The atomic find-and-update on `consumedAt: null` is the replay guard: an
+   * authorization code callback can be processed exactly once, so a captured
+   * callback URL cannot mint a second session.
+   *
+   * @param state - The plaintext `state` parameter from the OIDC callback.
+   * @returns The transaction as it was before consumption, or null when
+   *   unknown, expired, or already consumed.
+   */
   async consumeOidcTransaction(state: string) {
     const { oidcTransactions } = await collections();
     return oidcTransactions.findOneAndUpdate(

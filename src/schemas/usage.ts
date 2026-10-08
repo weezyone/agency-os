@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+/**
+ * Usage-metering contracts: per-call provider token usage events and the
+ * versioned price catalog used to estimate their cost.
+ *
+ * Monetary amounts are integer micros (millionths of a USD). Events and
+ * catalog records are persisted by the usage repository; the upsert schema is
+ * parsed at the pricing admin boundary.
+ */
 export const tokenUsageSchema = z.object({
   inputTokens: z.number().int().nonnegative().default(0),
   outputTokens: z.number().int().nonnegative().default(0),

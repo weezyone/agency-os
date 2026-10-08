@@ -9,6 +9,12 @@ const bodySchema = z.object({
   owner: z.object({ email: z.string().email(), displayName: z.string().trim().min(1).max(120) }),
 });
 
+/**
+ * Platform-level tenant provisioning. Deliberately NOT scoped to an existing
+ * tenant: only bootstrap/disabled-mode callers may create new tenants.
+ */
+
+/** Create a tenant and its owner. Requires `admin:tenant` AND bootstrap (or disabled-mode) auth; 403 for regular members. Returns 201. */
 export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request, "admin:tenant");

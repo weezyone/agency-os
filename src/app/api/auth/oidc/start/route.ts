@@ -4,6 +4,12 @@ import { beginOidcLogin } from "@/services/tenant-service";
 
 export const runtime = "nodejs";
 
+/**
+ * OIDC login initiation (public — allowlisted in src/proxy.ts). Begins an
+ * invite-gated OIDC+PKCE flow for the tenant identified by `?tenant=`.
+ */
+
+/** Redirect (302) to the tenant's OIDC provider authorization URL. 400 when `tenant` is missing. */
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);

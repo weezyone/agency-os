@@ -16,7 +16,24 @@ const collections = lazyAsync(async () => {
   return { secrets };
 });
 
+/**
+ * Tenant-scoped store for encrypted secrets.
+ *
+ * Values are envelope-encrypted per tenant before persistence and never leave
+ * the repository in cleartext except through the explicit `getValue*` reads.
+ */
 export const secretRepository = {
+  /**
+   * Creates or rotates a secret value.
+   *
+   * Rotation preserves id, creator, and creation time while updating
+   * `rotatedAt`. The returned record has its ciphertext and auth tag redacted
+   * so callers (and their logs/serializers) cannot accidentally expose them.
+   *
+   * @param input - Secret name, purpose, and plaintext value.
+   * @param actor - Principal performing the write.
+   * @returns The stored record with sensitive envelope fields redacted.
+   */
   async upsert(input: UpsertTenantSecretInput, actor: string) {
     const { secrets } = await collections();
     const tenantId = currentTenantId();
@@ -38,6 +55,13 @@ export const secretRepository = {
     return { ...record, envelope: { ...record.envelope, ciphertext: "[redacted]", authTag: "[redacted]" } };
   },
 
+  /**
+   * Decrypts and returns a secret's plaintext value.
+   *
+   * @param id - Secret id.
+   * @param tenantId - Owning tenant; defaults to the current tenant context.
+   * @returns The decrypted value, or null when not found or revoked.
+   */
   async getValue(id: string, tenantId = currentTenantId()) {
     const { secrets } = await collections();
     const record = await secrets.findOne({ id, tenantId, revokedAt: null }, { projection: { _id: 0 } });
@@ -45,6 +69,12 @@ export const secretRepository = {
     return decryptTenantValue(record.tenantId, record.name, record.envelope);
   },
 
+  /**
+   * Decrypts and returns a secret's plaintext value by name.
+   *
+   * @param name - Secret name within the current tenant.
+   * @returns The decrypted value, or null when not found or revoked.
+   */
   async getValueByName(name: string) {
     const { secrets } = await collections();
     const record = await secrets.findOne(tenantFilter({ name, revokedAt: null }), { projection: { _id: 0 } });
@@ -52,6 +82,9 @@ export const secretRepository = {
     return decryptTenantValue(record.tenantId, record.name, record.envelope);
   },
 
+  /**
+   * @returns Secret metadata for the tenant with all envelope material (ciphertext, auth tag, IV) excluded.
+   */
   async list() {
     const { secrets } = await collections();
     return secrets.find(tenantFilter(), {
@@ -59,6 +92,12 @@ export const secretRepository = {
     }).sort({ updatedAt: -1 }).toArray();
   },
 
+  /**
+   * Soft-revokes a secret so it can no longer be read while keeping the audit trail.
+   *
+   * @param id - Secret id within the current tenant.
+   * @returns The revoked record (envelope omitted), or null when not found or already revoked.
+   */
   async revoke(id: string) {
     const { secrets } = await collections();
     return secrets.findOneAndUpdate(

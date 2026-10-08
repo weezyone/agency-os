@@ -10,10 +10,24 @@ function keyBytes() {
   return key;
 }
 
+// The tenant id and secret name are bound as GCM associated data, so an
+// envelope copied to another tenant or a differently-named field fails
+// authentication instead of decrypting to a valid secret in the wrong context.
 function additionalData(tenantId: string, name: string) {
   return Buffer.from(`agency-os:v1:${tenantId}:${name}`, "utf8");
 }
 
+/**
+ * Encrypts a tenant-owned secret with AES-256-GCM under the platform key.
+ * The tenant id and secret name are bound as associated data (see
+ * `additionalData`), and a fresh 96-bit IV is generated per call.
+ *
+ * @param tenantId - Owning tenant; becomes part of the authenticated context.
+ * @param name - Logical secret name; becomes part of the authenticated context.
+ * @param plaintext - Secret value to encrypt.
+ * @returns The versioned encrypted envelope for storage.
+ * @throws {Error} When no encryption key is configured or it is malformed.
+ */
 export function encryptTenantValue(tenantId: string, name: string, plaintext: string): EncryptedEnvelope {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", keyBytes(), iv);
@@ -29,6 +43,20 @@ export function encryptTenantValue(tenantId: string, name: string, plaintext: st
   };
 }
 
+/**
+ * Decrypts a tenant secret envelope produced by {@link encryptTenantValue}.
+ * The same tenant id and name must be supplied because they are authenticated
+ * as GCM associated data; GCM tag verification also detects any tampering
+ * with the ciphertext before plaintext is released.
+ *
+ * @param tenantId - Tenant the envelope belongs to.
+ * @param name - Logical secret name used at encryption time.
+ * @param envelope - Stored encrypted envelope.
+ * @returns The decrypted plaintext secret.
+ * @throws {Error} When the key id is not active, the encryption key is
+ *   missing/malformed, or authentication fails (wrong tenant/name or
+ *   tampered envelope).
+ */
 export function decryptTenantValue(tenantId: string, name: string, envelope: EncryptedEnvelope) {
   if (envelope.keyId !== env().AGENCY_SECRET_KEY_ID) {
     throw new Error(`Tenant secret uses unavailable key id ${envelope.keyId}`);

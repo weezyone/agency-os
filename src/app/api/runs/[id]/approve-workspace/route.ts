@@ -6,6 +6,12 @@ import { approveWorkspaceRun } from "@/services/execution-service";
 
 const bodySchema = z.object({ reason: z.string().trim().min(1).optional() });
 
+/**
+ * Workspace approval endpoint: marks a run's workspace output as reviewed and
+ * approved, scoped to the caller's tenant.
+ */
+
+/** Approve a run's workspace. Requires `workspace:review`; an empty body is accepted (reason optional). */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "workspace:review");

@@ -17,12 +17,21 @@ function resolveKey(storageKey: string) {
   const root = path.resolve(env().AGENCY_ARTIFACT_ROOT);
   const normalized = normalizeKey(storageKey);
   const absolutePath = path.resolve(root, normalized);
+  // Belt-and-suspenders on top of normalizeKey: even if the segment rules
+  // regress, a resolved path outside the artifact root is rejected here so
+  // storage keys can never read or write arbitrary host files.
   if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) {
     throw new Error("Artifact path escapes the configured root");
   }
   return { root, normalized, absolutePath };
 }
 
+/**
+ * Local-disk artifact store. Writes go to a unique temp file and are renamed
+ * into place so concurrent readers never observe a partially written
+ * artifact; files are `0600` and directories `0700` because artifacts may
+ * contain sensitive run evidence.
+ */
 export const filesystemArtifactStore: ArtifactStore = {
   name: "filesystem",
   async put(storageKey: string, content: Buffer) {

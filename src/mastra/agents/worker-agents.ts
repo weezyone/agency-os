@@ -2,6 +2,11 @@ import { Agent } from "@mastra/core/agent";
 import { env } from "@/lib/env";
 import { agencyMemory } from "@/mastra/memory";
 
+/**
+ * System instructions shared by every specialist worker: one bounded task,
+ * evidence-only claims, and (in workspace mode) repository mutations expressed
+ * exclusively through structured `fileChanges`.
+ */
 const sharedInstructions = `
 You are a specialist worker inside AgencyOS, an agentic design/development agency.
 You receive one bounded task with project context and acceptance criteria.
@@ -21,6 +26,14 @@ Execution rules:
 - Keep handoffs precise enough for the next specialist or human operator to continue.
 `;
 
+/**
+ * Builds a specialist worker agent: the shared instructions plus a specialty
+ * block, running on the worker model (`AGENCY_WORKER_MODEL`).
+ *
+ * @param input.id Stable agent id; doubles as the `AgentRole` dispatch key in `workerAgents`.
+ * @param input.specialty Role-specific instruction block appended to the shared instructions.
+ * @returns The configured specialist agent.
+ */
 function createWorkerAgent(input: {
   id: string;
   name: string;
@@ -37,6 +50,7 @@ function createWorkerAgent(input: {
   });
 }
 
+/** Specialist worker for architecture, technical decomposition, and implementation sequencing. */
 export const techLeadAgent = createWorkerAgent({
   id: "tech-lead",
   name: "Agency Tech Lead",
@@ -47,6 +61,7 @@ Prefer explicit tradeoffs, file-level plans, API contracts, and testable technic
 `,
 });
 
+/** Specialist worker for evidence-based research, audits, and recommendations. */
 export const researchAgent = createWorkerAgent({
   id: "research",
   name: "Agency Researcher",
@@ -57,6 +72,7 @@ Never fabricate citations or claim web research occurred when no source material
 `,
 });
 
+/** Specialist worker for UX flows, interface specifications, and design direction. */
 export const designAgent = createWorkerAgent({
   id: "design",
   name: "Agency Design Lead",
@@ -67,6 +83,7 @@ Describe visual deliverables precisely. Do not claim a Figma file or rendered as
 `,
 });
 
+/** Specialist worker for React/Next.js/TypeScript frontend implementation artifacts. */
 export const frontendAgent = createWorkerAgent({
   id: "frontend",
   name: "Agency Frontend Engineer",
@@ -77,6 +94,7 @@ Make code artifacts internally consistent and identify any backend or design dep
 `,
 });
 
+/** Specialist worker for APIs, data models, integration logic, and backend tests. */
 export const backendAgent = createWorkerAgent({
   id: "backend",
   name: "Agency Backend Engineer",
@@ -87,6 +105,7 @@ Prefer safe defaults and call out transaction or reconciliation requirements exp
 `,
 });
 
+/** Specialist worker for test plans, verification artifacts, and defect reports. */
 export const qaWorkerAgent = createWorkerAgent({
   id: "qa-worker",
   name: "Agency QA Engineer",
@@ -97,6 +116,10 @@ Distinguish tests that were actually run from tests that are only proposed.
 `,
 });
 
+/**
+ * Specialist workers keyed by `AgentRole`. The execution service dispatches a
+ * run to `workerAgents[run.assignedRole]`.
+ */
 export const workerAgents = {
   "tech-lead": techLeadAgent,
   research: researchAgent,

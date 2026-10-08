@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+/**
+ * Identity and access contracts: tenant members, RBAC roles and permissions,
+ * API keys, browser sessions, and the authenticated principal.
+ *
+ * Input schemas are parsed at API boundaries; record types are persisted by
+ * the identity repository. Credentials are stored only as SHA-256 hashes.
+ */
 export const memberRoleSchema = z.enum(["owner", "admin", "operator", "reviewer", "viewer"]);
 export const memberStatusSchema = z.enum(["active", "disabled"]);
 
@@ -66,6 +73,7 @@ export const browserSessionSchema = z.object({
   ipHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
 });
 
+/** The actor resolved for a request, with the effective permission set derived from its role and auth method. */
 export const principalSchema = z.object({
   id: z.string(),
   tenantId: z.string().min(1),

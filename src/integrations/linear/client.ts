@@ -5,6 +5,15 @@ const LINEAR_ENDPOINT = "https://api.linear.app/graphql";
 type GraphQLError = { message?: string };
 type LinearResponse<T> = { data?: T; errors?: GraphQLError[] };
 
+/**
+ * Executes a Linear GraphQL operation with the current tenant's resolved
+ * credential (OAuth bearer or raw API key).
+ *
+ * @param query - GraphQL document.
+ * @param variables - Variables for the document.
+ * @returns The `data` payload, typed by the caller.
+ * @throws {Error} On non-2xx HTTP, any GraphQL errors, or a missing data payload.
+ */
 export async function linearGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   const config = await linearIntegrationConfig();
 

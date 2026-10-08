@@ -4,6 +4,12 @@ import { apiError } from "@/lib/http";
 import { policyRepository } from "@/repositories/policy-repository";
 import { createActionPolicy } from "@/services/policy-service";
 
+/**
+ * Action-policy version management for the caller's tenant. Policies govern
+ * which actions require approval and how they execute.
+ */
+
+/** List policy versions. Requires `admin:policies`. */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "admin:policies");
@@ -13,6 +19,7 @@ export async function GET(request: Request) {
   }
 }
 
+/** Create a new policy version (inactive until activated). Requires `admin:policies`; returns 201. */
 export async function POST(request: Request) {
   try {
     const principal = await requirePrincipal(request, "admin:policies");

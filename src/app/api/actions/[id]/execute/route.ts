@@ -3,6 +3,11 @@ import { apiError } from "@/lib/http";
 import { requirePrincipal } from "@/lib/authorization";
 import { executeAction } from "@/services/action-service";
 
+/**
+ * Action execution endpoint for the caller's tenant.
+ */
+
+/** Execute an approved action. Requires `action:execute`; returns 202 while the action is still executing, otherwise 200. */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "action:execute");

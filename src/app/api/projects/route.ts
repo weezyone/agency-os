@@ -3,6 +3,11 @@ import { projectRepository } from "@/repositories/project-repository";
 import { apiError } from "@/lib/http";
 import { requirePrincipal } from "@/lib/authorization";
 
+/**
+ * Project collection endpoint for the caller's tenant.
+ */
+
+/** List projects. Requires `control:read`. */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "control:read");

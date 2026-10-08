@@ -11,6 +11,13 @@ const roleRules: Array<{ role: AgentRole; terms: string[] }> = [
   { role: "tech-lead", terms: ["tech lead", "technical lead", "architect", "engineering lead", "software engineer"] },
 ];
 
+/**
+ * Maps a free-text task owner role onto a known agent role using keyword
+ * rules, defaulting to `tech-lead` when nothing matches.
+ *
+ * @param ownerRole Free-text role from the task (e.g. "React developer").
+ * @returns The closest matching agent role.
+ */
 export function resolveAgentRole(ownerRole: string): AgentRole {
   const normalized = ownerRole.toLowerCase().trim();
   return roleRules.find((rule) => rule.terms.some((term) => normalized.includes(term)))?.role ?? "tech-lead";
@@ -31,6 +38,16 @@ const workspaceTaskTerms = [
   "test",
 ];
 
+/**
+ * Chooses whether a task runs in `workspace` mode (repository checkout,
+ * patch, validation) or `artifact` mode (document-only output). Frontend and
+ * backend roles always need a workspace; other roles fall back to artifacts
+ * unless a tech-lead task's text mentions implementation work.
+ *
+ * @param task The task being queued.
+ * @param role The resolved agent role for the task.
+ * @returns The execution mode for the run.
+ */
 export function resolveExecutionMode(task: Task, role: AgentRole): ExecutionMode {
   if (role === "frontend" || role === "backend") return "workspace";
   if (role !== "tech-lead") return "artifact";
@@ -39,6 +56,17 @@ export function resolveExecutionMode(task: Task, role: AgentRole): ExecutionMode
 }
 
 
+/**
+ * Normalizes a raw QA agent result into the control plane's verdict
+ * vocabulary. A passing-looking verdict is downgraded to `revise` whenever the
+ * score is below threshold or any acceptance criterion failed, and concrete
+ * revision instructions are synthesized when the agent left them empty — the
+ * next attempt must always receive actionable feedback.
+ *
+ * @param qa The QA result returned by the quality-gate agent.
+ * @param minQaScore Minimum score required to pass.
+ * @returns The normalized QA result.
+ */
 export function normalizeQaResult(qa: QaResult, minQaScore: number): QaResult {
   if (qa.verdict === "fail") return qa;
 
@@ -63,6 +91,17 @@ export function normalizeQaResult(qa: QaResult, minQaScore: number): QaResult {
   };
 }
 
+/**
+ * Normalizes a QA result for workspace-mode runs. On top of score/criteria
+ * checks, a failed or missing workspace validation gate forces a revision —
+ * the QA narrative can never override authoritative command evidence.
+ *
+ * @param qa The QA result returned by the quality-gate agent.
+ * @param minQaScore Minimum score required to pass.
+ * @param validation The workspace validation result, or `null` when no
+ *   allowlisted validation command ran.
+ * @returns The normalized QA result with validation instructions attached.
+ */
 export function normalizeWorkspaceQaResult(
   qa: QaResult,
   minQaScore: number,
@@ -85,8 +124,18 @@ export function normalizeWorkspaceQaResult(
   };
 }
 
+/** Terminal QA decision for one execution attempt. */
 export type QaOutcome = "passed" | "revision_requested" | "failed";
 
+/**
+ * Decides the attempt outcome from a normalized QA result. Passing requires
+ * both a `pass` verdict and a threshold score; anything else becomes a
+ * revision request while attempt budget remains, and a failure once the
+ * budget is exhausted (or on an explicit `fail` verdict).
+ *
+ * @param input QA result, score threshold, and attempt budget position.
+ * @returns The outcome to persist for the attempt.
+ */
 export function decideQaOutcome(input: {
   qa: QaResult;
   minQaScore: number;
@@ -102,11 +151,22 @@ function normalizeDependency(value: string) {
   return value.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
+/** Readiness verdict for queueing a task, with human-readable blockers. */
 export type TaskReadiness = {
   ready: boolean;
   reasons: string[];
 };
 
+/**
+ * Checks whether a task may be queued for execution. A task is not ready when
+ * it is already done or blocked, has an active run, or any dependency
+ * (matched by id or normalized title against sibling tasks) is unresolved or
+ * incomplete.
+ *
+ * @param task The task to evaluate.
+ * @param projectTasks All tasks of the same project, used to resolve dependencies.
+ * @returns Readiness flag plus the reasons blocking execution, if any.
+ */
 export function evaluateTaskReadiness(task: Task, projectTasks: Task[]): TaskReadiness {
   const reasons: string[] = [];
 

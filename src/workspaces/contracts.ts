@@ -1,3 +1,4 @@
+/** Execution trust level: "trusted" runs in-process, "sandbox" must be isolated by the provider. */
 export type CommandIsolation = "trusted" | "sandbox";
 export type WorkspaceRuntimeProvider = "local-process" | "docker-isolated" | "remote-http";
 
@@ -10,6 +11,7 @@ export type SandboxResourceLimits = {
   readOnlyRoot: boolean;
 };
 
+/** Immutable repository and patch evidence a remote sandbox materializes before running commands. */
 export type RemoteWorkspaceDescriptor = {
   tenantId: string;
   repositoryUrl: string;
@@ -59,6 +61,7 @@ export type WorkspaceProviderHealth = {
   message: string;
 };
 
+/** Contract every workspace runtime (local, Docker, remote HTTP sandbox) implements to run commands. */
 export interface WorkspaceProcessProvider {
   readonly name: WorkspaceRuntimeProvider;
   run(request: CommandRequest): Promise<CommandResult>;

@@ -6,6 +6,11 @@ import { rejectWorkspaceRun } from "@/services/execution-service";
 
 const bodySchema = z.object({ reason: z.string().trim().min(1) });
 
+/**
+ * Workspace rejection endpoint, scoped to the caller's tenant.
+ */
+
+/** Reject a run's workspace output. Requires `workspace:review` and a non-empty reason. */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "workspace:review");

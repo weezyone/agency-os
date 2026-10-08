@@ -23,6 +23,14 @@ function usageCandidate(result: unknown): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * Extracts normalized token usage from an agent generation result, tolerating
+ * the different field names providers use (`promptTokens` vs `inputTokens`,
+ * etc.) and falling back to the last step's usage for multi-step results.
+ *
+ * @param result Raw generation result returned by a Mastra agent.
+ * @returns Normalized token usage, or `null` when the result carries none.
+ */
 export function extractTokenUsage(result: unknown): TokenUsage | null {
   const candidate = usageCandidate(result);
   if (!candidate) return null;
@@ -40,6 +48,15 @@ function splitModel(model: string) {
   return rest.length ? { provider, model: rest.join("/") } : { provider: "unknown", model };
 }
 
+/**
+ * Estimates the cost of one generation in micros (1/1,000,000 of a currency
+ * unit) from token usage and a price catalog entry. Cached input tokens are
+ * billed at their discounted rate instead of the full input rate.
+ *
+ * @param usage Normalized token usage.
+ * @param price Per-million-token prices in micros for the model.
+ * @returns Estimated cost in micros, rounded up.
+ */
 export function estimateUsageCostMicros(usage: TokenUsage, price: {
   inputMicrosPerMillion: number;
   outputMicrosPerMillion: number;
@@ -54,6 +71,16 @@ export function estimateUsageCostMicros(usage: TokenUsage, price: {
   return Math.ceil(numerator / 1_000_000);
 }
 
+/**
+ * Records one agent generation in the usage ledger. The model string's
+ * provider prefix selects the active price catalog entry; the entry's version
+ * is stored alongside the estimate so historical costs remain explainable
+ * after price changes. Generations without extractable usage are skipped.
+ *
+ * @param input Generation result, model, agent/operation labels, and optional
+ *   correlation ids into the execution domain.
+ * @returns The recorded ledger entry, or `null` when no usage was present.
+ */
 export async function recordGenerationUsage(input: {
   result: unknown;
   model: string;
@@ -85,10 +112,23 @@ export async function recordGenerationUsage(input: {
   });
 }
 
+/**
+ * Upserts a tenant price catalog entry for a provider/model pair.
+ *
+ * @param input Raw price payload, parsed against `upsertPriceCatalogSchema`.
+ * @param principal Principal recorded as the author of the price change.
+ * @returns The persisted price catalog entry.
+ * @throws When the input fails schema validation.
+ */
 export async function configurePrice(input: unknown, principal: Principal) {
   return usageRepository.upsertPrice(upsertPriceCatalogSchema.parse(input), principalActor(principal));
 }
 
+/**
+ * Reports the model identifiers configured for each agent role.
+ *
+ * @returns Model ids for the pm, worker, qa, and memory agents.
+ */
 export function configuredModels() {
   const config = env();
   return {

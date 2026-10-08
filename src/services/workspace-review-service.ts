@@ -7,6 +7,22 @@ import type { Principal } from "@/schemas/identity";
 import { proposeAction } from "@/services/action-service";
 import { workspaceFingerprint } from "@/services/workspace-service";
 
+/**
+ * Proposes a `github.publishWorkspace` action for a passed run's approved
+ * workspace, pinning the immutable patch artifact id, its SHA-256 digest, and
+ * the workspace's base/branch coordinates into the payload so the eventual
+ * publish step can verify it reproduces exactly the reviewed change set. The
+ * idempotency key embeds the workspace fingerprint and patch digest, so
+ * re-proposal collapses unless the reviewed content actually changed.
+ *
+ * @param runId Execution run whose workspace should be published.
+ * @param rawInput Raw overrides (title, body, draft), parsed against
+ *   `proposeWorkspacePublishSchema`.
+ * @param requestedBy Requesting principal or system actor id.
+ * @returns The proposed action record.
+ * @throws When the run, workspace, repository binding, or patch artifact is
+ *   missing or not in an approved/passed state.
+ */
 export async function proposeWorkspacePublish(
   runId: string,
   rawInput: unknown = {},

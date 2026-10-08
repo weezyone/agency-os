@@ -12,6 +12,12 @@ const bodySchema = z.object({
 
 export const runtime = "nodejs";
 
+/**
+ * Run execution enqueue endpoint: creates an execution job for a run of the
+ * caller's tenant, with optional priority and delivery limits.
+ */
+
+/** Enqueue a run for execution. Requires `run:dispatch`; 202 with a `location` header when the job is queued, 200 if it started immediately. */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "run:dispatch");

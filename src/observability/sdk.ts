@@ -16,6 +16,12 @@ function applyEnvironment() {
   process.env.OTEL_TRACES_SAMPLER_ARG ||= String(config.AGENCY_OTEL_SAMPLE_RATIO);
 }
 
+/**
+ * Starts the OpenTelemetry NodeSDK once per process. No-ops unless
+ * `AGENCY_OTEL_ENABLED`; the SDK is imported dynamically so its dependency
+ * tree is only loaded when telemetry is actually on. Concurrent callers share
+ * the same start promise.
+ */
 export async function startTelemetry() {
   if (!env().AGENCY_OTEL_ENABLED) return;
   if (startPromise) return startPromise;
@@ -29,6 +35,7 @@ export async function startTelemetry() {
   return startPromise;
 }
 
+/** Flushes and stops the running SDK, if any, so a later start can reinitialize. */
 export async function shutdownTelemetry() {
   if (!sdk) return;
   const active = sdk;

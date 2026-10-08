@@ -1,6 +1,15 @@
 import { z } from "zod";
 import { memberRoleSchema } from "@/schemas/identity";
 
+/**
+ * Contracts for controlled external actions (Linear and GitHub writes).
+ *
+ * Actions are proposed by agents or operators, approved by humans, and
+ * executed via the outbox; each record embeds an immutable snapshot of the
+ * policy decision that authorized it. Proposal and payload schemas are parsed
+ * in the action service and actions API route; record and event types describe
+ * documents persisted by the action repository.
+ */
 export const actionKindSchema = z.enum([
   "linear.createProject",
   "linear.createIssue",
@@ -55,6 +64,7 @@ export const githubPublishWorkspacePayloadSchema = z.object({
   draft: z.boolean().default(true),
 });
 
+/** Maps each action kind to its payload schema; used to re-validate stored payloads at execution time. */
 export const actionPayloadSchemas = {
   "linear.createProject": linearCreateProjectPayloadSchema,
   "linear.createIssue": linearCreateIssuePayloadSchema,
@@ -70,6 +80,7 @@ export const proposeActionSchema = z.discriminatedUnion("kind", [
 ]);
 
 
+/** Immutable copy of the policy decision captured at proposal time, so later policy edits cannot rewrite history. */
 export const actionPolicySnapshotSchema = z.object({
   policyId: z.string().min(1),
   policyVersion: z.number().int().min(1),

@@ -3,6 +3,11 @@ import { apiError } from "@/lib/http";
 import { requirePrincipal } from "@/lib/authorization";
 import { operationsSnapshot } from "@/services/metrics-service";
 
+/**
+ * Operations overview snapshot (runners, outbox, jobs, storage) for the caller's tenant.
+ */
+
+/** Get the operations snapshot, probing the artifact store. Requires `metrics:read`. */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "metrics:read");

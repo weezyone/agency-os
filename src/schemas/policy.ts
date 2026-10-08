@@ -2,6 +2,17 @@ import { z } from "zod";
 import { actionKindSchema, actionRiskSchema } from "@/schemas/actions";
 import { memberRoleSchema } from "@/schemas/identity";
 
+/**
+ * Versioned action-policy contracts governing external actions.
+ *
+ * A policy document pairs match rules with effects (deny, required approvals,
+ * approver/executor roles). A rule matches when every populated match field
+ * matches; a matching deny rule always wins; otherwise the first matching
+ * rule applies, falling back to `defaultEffect`. Documents are versioned and
+ * content-addressed by checksum, and each decision is snapshotted onto the
+ * action record at proposal time. Evaluated by the policy service and
+ * persisted by the policy repository.
+ */
 export const policyMatchSchema = z.object({
   actionKinds: z.array(actionKindSchema).min(1).optional(),
   risks: z.array(actionRiskSchema).min(1).optional(),
@@ -50,6 +61,7 @@ export const createActionPolicySchema = z.object({
   activate: z.boolean().default(false),
 });
 
+/** Resolved policy decision embedded on action records for audit (mirrors `actionPolicySnapshotSchema` in actions.ts). */
 export const actionPolicyDecisionSchema = z.object({
   policyId: z.string().min(1),
   policyVersion: z.number().int().min(1),

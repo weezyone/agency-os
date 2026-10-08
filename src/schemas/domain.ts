@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+/**
+ * Core delivery domain records: clients, projects, tasks, and their statuses.
+ *
+ * These types describe documents persisted by the project repository and are
+ * the authoritative project/task records the agents treat as truth.
+ */
 export const projectStatusSchema = z.enum([
   "intake",
   "planning",
@@ -13,6 +19,7 @@ export const projectStatusSchema = z.enum([
 export const taskStatusSchema = z.enum(["backlog", "todo", "in_progress", "review", "done", "blocked"]);
 export const prioritySchema = z.enum(["low", "medium", "high", "urgent"]);
 
+/** Git remote bound to a project; the basis for workspaces and publish actions. */
 export const repositoryBindingSchema = z.object({
   provider: z.enum(["github", "git"]),
   url: z.string().url(),

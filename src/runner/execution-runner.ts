@@ -140,6 +140,8 @@ async function main() {
       return true;
     };
 
+    // Alternate which pool is polled first so neither outbox messages nor
+    // execution jobs can starve the other when both queues stay non-empty.
     const claimed = preferOutbox
       ? await tryOutbox() || await tryExecution()
       : await tryExecution() || await tryOutbox();
@@ -167,6 +169,8 @@ async function main() {
       await runnerRepository.heartbeat(runnerId, activeIds());
       if (once && active.size === 0) break;
       if (!claimedAny || active.size >= config.AGENCY_RUNNER_CONCURRENCY) {
+        // Sleep until the next poll tick, but wake early when any in-flight job
+        // settles so a freed concurrency slot is refilled without waiting.
         await Promise.race([
           sleep(Math.min(config.AGENCY_RUNNER_POLL_MS, config.AGENCY_OUTBOX_POLL_MS), shutdown.signal),
           ...active.values(),
@@ -178,6 +182,8 @@ async function main() {
     clearInterval(artifactCleanup);
     await runnerRepository.drain(runnerId, activeIds()).catch(() => undefined);
     if (active.size) {
+      // Give in-flight jobs a bounded grace period to finish; after the cleanup
+      // timeout the process exits and their expired leases are reaped by peers.
       await Promise.race([
         Promise.allSettled(active.values()),
         sleep(config.AGENCY_SANDBOX_CLEANUP_TIMEOUT_MS),

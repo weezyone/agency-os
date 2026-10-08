@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+/**
+ * Contracts for stored execution artifacts: workspace patches, worker output,
+ * QA results, command logs, execution manifests, and provenance attestations.
+ *
+ * Records carry content-addressed metadata (sha256, size, storage URI) for
+ * blobs held by the artifact providers (filesystem or S3) and are persisted
+ * via the artifact repository.
+ */
 export const artifactKindSchema = z.enum([
   "workspace_patch",
   "worker_output",

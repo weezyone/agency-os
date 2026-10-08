@@ -135,6 +135,16 @@ QA RULES FOR WORKSPACE MODE
 `;
 }
 
+/**
+ * Queues a new execution run for a task, resolving the agent role and
+ * execution mode from policy when the caller does not pin them, and moves the
+ * task into `todo` with the run marked active.
+ *
+ * @param taskId Task to execute.
+ * @param rawInput Raw queueing options, parsed against `queueTaskRunSchema`.
+ * @returns The queued (or existing idempotent) execution run.
+ * @throws When the task does not exist or is already done.
+ */
 export async function queueTaskRun(taskId: string, rawInput: QueueTaskRunInput | unknown = {}) {
   const input = queueTaskRunSchema.parse(rawInput);
   const context = await projectRepository.getTaskContext(taskId);
@@ -167,6 +177,16 @@ export async function queueTaskRun(taskId: string, rawInput: QueueTaskRunInput |
   return run;
 }
 
+/**
+ * Queues runs for every ready task in a project, returning per-task skip
+ * reasons for the rest so operators can see exactly which dependencies or
+ * states block autonomous scheduling.
+ *
+ * @param projectId Project whose tasks should be evaluated.
+ * @param requestedBy Actor recorded as the run requester.
+ * @returns The project, the queued runs, and the skipped tasks with reasons.
+ * @throws When the project does not exist.
+ */
 export async function queueReadyTasks(projectId: string, requestedBy = "project-manager-agent") {
   const bundle = await projectRepository.getProject(projectId);
   if (!bundle) throw new Error("Project not found");
@@ -186,6 +206,22 @@ export async function queueReadyTasks(projectId: string, requestedBy = "project-
   return { project: bundle.project, queued, skipped };
 }
 
+/**
+ * Executes one attempt of a queued run end to end: claims the run, prepares a
+ * workspace when in workspace mode, generates worker output, applies and
+ * validates file changes, runs the independent QA gate, and persists the
+ * resulting outcome (passed, approval_required, revision_requested, or
+ * failed). Every stage boundary passes through the lease guard so cancelled
+ * or lease-lost work aborts before producing durable state; unfinished
+ * attempts are interrupted on failure so no run stays stuck mid-flight.
+ *
+ * @param runId Execution run to execute.
+ * @param executedBy Actor recorded on run and workspace events.
+ * @param guard Optional lease-fencing guard supplied by the job runner.
+ * @returns The execution detail after the attempt finished.
+ * @throws When the run does not exist, cannot start from its status, has
+ *   exhausted its attempt budget, or any stage fails (including lease loss).
+ */
 export async function executeRun(
   runId: string,
   executedBy = "operator-dashboard",
@@ -346,6 +382,9 @@ export async function executeRun(
     let qa = workspace
       ? normalizeWorkspaceQaResult(parsedQa, runtimeRun.minQaScore, workspace.validation)
       : normalizeQaResult(parsedQa, runtimeRun.minQaScore);
+    // An implementation attempt that produced no repository changes can never
+    // pass, regardless of the QA narrative: force a revision so the worker
+    // must deliver an actual patch.
     if (workspace && workspace.changedFiles.length === 0 && qa.verdict !== "fail") {
       const instruction = "Produce a non-empty repository patch that satisfies the assigned implementation task.";
       qa = {
@@ -363,6 +402,8 @@ export async function executeRun(
       currentAttempt: runtimeRun.currentAttempt,
       maxAttempts: runtimeRun.maxAttempts,
     });
+    // Workspace-mode passes are never final: a human approval gate sits
+    // between QA success and any publishable workspace state.
     const runOutcome = workspace && qaOutcome === "passed" ? "approval_required" : qaOutcome;
 
     await checkpoint("before-qa-persist");
@@ -459,6 +500,22 @@ export async function executeRun(
   }
 }
 
+/**
+ * Records human approval of a run's workspace and completes the run. Approval
+ * requires the run to be waiting in `approval_required` with a succeeded
+ * durable delivery — the stored delivery proves the reviewed artifacts are
+ * persisted before the workspace becomes publishable. When configured,
+ * separation of duties forbids the run requester from approving their own
+ * run, because publication authority must sit with a second human.
+ *
+ * @param runId Execution run awaiting approval.
+ * @param approvedBy Approver identity.
+ * @param reason Optional approval note recorded on the workspace.
+ * @returns The execution detail after approval.
+ * @throws When the run does not exist, is not awaiting approval, the durable
+ *   delivery did not succeed, the requester self-approves, or the workspace
+ *   or run changed state concurrently.
+ */
 export async function approveWorkspaceRun(
   runId: string,
   approvedBy: string,
@@ -495,6 +552,18 @@ export async function approveWorkspaceRun(
   return getExecutionDetail(run.id);
 }
 
+/**
+ * Records human rejection of a run's workspace. The run moves to
+ * `revision_requested` while attempt budget remains (returning the task to
+ * `in_progress`) or to `failed` (blocking the task) when exhausted.
+ *
+ * @param runId Execution run awaiting approval.
+ * @param rejectedBy Reviewer identity.
+ * @param reason Human-readable rejection reason fed back as revision guidance.
+ * @returns The execution detail after rejection.
+ * @throws When the run does not exist, is not awaiting approval, the durable
+ *   delivery did not succeed, or the workspace or run changed state concurrently.
+ */
 export async function rejectWorkspaceRun(
   runId: string,
   rejectedBy: string,
@@ -536,6 +605,13 @@ export async function rejectWorkspaceRun(
   return getExecutionDetail(run.id);
 }
 
+/**
+ * Loads the full execution detail for a run, including the public workspace
+ * record, recorded commands, and workspace events when a workspace exists.
+ *
+ * @param runId Execution run identifier.
+ * @returns The execution detail, or `null` when the run does not exist.
+ */
 export async function getExecutionDetail(runId: string) {
   const detail = await executionRepository.getDetail(runId);
   if (!detail) return null;
@@ -550,6 +626,16 @@ export async function getExecutionDetail(runId: string) {
   };
 }
 
+/**
+ * Cancels a non-terminal execution run from the control plane and returns the
+ * task to `todo` with no active run.
+ *
+ * @param runId Execution run to cancel.
+ * @param cancelledBy Operator identity recorded on the audit event.
+ * @param reason Human-readable cancellation reason.
+ * @returns The cancelled run.
+ * @throws When the run does not exist or is already in a terminal status.
+ */
 export async function cancelRun(runId: string, cancelledBy: string, reason: string) {
   const run = await executionRepository.cancel(runId, cancelledBy, reason);
   if (!run) {

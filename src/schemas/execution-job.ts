@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+/**
+ * Durable queue contracts for execution jobs.
+ *
+ * A job carries one run attempt through a lease-based queue with bounded
+ * redelivery, heartbeats, cancellation, and dead-lettering. Jobs are persisted
+ * by the execution-job repository and claimed by registered runner nodes; the
+ * enqueue schema is parsed by the execution-job service.
+ */
 export const executionJobStatusSchema = z.enum([
   "queued",
   "leased",
@@ -89,6 +97,7 @@ export const enqueueExecutionJobSchema = z.object({
   maxDeliveries: z.number().int().min(1).max(20).optional(),
 });
 
+/** A registered executor process and the queues/resource classes it can claim jobs from. */
 export const runnerNodeSchema = z.object({
   id: z.string(),
   hostname: z.string().min(1),
@@ -114,6 +123,7 @@ export type ExecutionJobEvent = z.infer<typeof executionJobEventSchema>;
 export type EnqueueExecutionJobInput = z.infer<typeof enqueueExecutionJobSchema>;
 export type RunnerNode = z.infer<typeof runnerNodeSchema>;
 
+/** A leased job plus the raw lease token the holder needs to heartbeat, complete, or release it. */
 export type ClaimedExecutionJob = {
   job: ExecutionJob;
   leaseToken: string;

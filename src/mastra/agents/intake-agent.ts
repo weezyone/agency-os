@@ -2,6 +2,11 @@ import { Agent } from "@mastra/core/agent";
 import { agencyMemory } from "@/mastra/memory";
 import { env } from "@/lib/env";
 
+/**
+ * Intake analyst agent: turns a raw client request into a precise, bounded
+ * project brief. Its structured output is parsed as `IntakeAnalysis`
+ * (src/schemas/intake.ts) by the intake service.
+ */
 export const intakeAgent = new Agent({
   id: "intake-agent",
   name: "Agency Intake Analyst",

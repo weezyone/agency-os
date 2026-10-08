@@ -8,6 +8,13 @@ import { workspaceRepository } from "@/repositories/workspace-repository";
 import { publicWorkspace } from "@/services/workspace-public";
 import { publicExecutionJob } from "@/services/execution-job-public";
 
+/**
+ * Project runs overview, scoped to the caller's tenant. Aggregates run activity,
+ * workspaces (sanitized), execution jobs (sanitized), and artifact metadata with
+ * download URLs.
+ */
+
+/** Get runs, jobs, workspaces, and artifacts for a project. Requires `control:read`. */
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     await requirePrincipal(request, "control:read");

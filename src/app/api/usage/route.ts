@@ -3,6 +3,12 @@ import { requirePrincipal } from "@/lib/authorization";
 import { apiError } from "@/lib/http";
 import { usageRepository } from "@/repositories/usage-repository";
 
+/**
+ * Usage reporting endpoint for the caller's tenant: recent usage events plus an
+ * aggregate summary over a trailing window.
+ */
+
+/** List usage events and a summary. Requires `usage:read`. Query params: `limit` (default 200), `projectId`, `runId`, `days` (default 30, clamped to 1–3650). */
 export async function GET(request: Request) {
   try {
     await requirePrincipal(request, "usage:read");

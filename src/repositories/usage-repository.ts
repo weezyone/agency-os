@@ -22,7 +22,20 @@ const collections = lazyAsync(async () => {
   return { usage, prices };
 });
 
+/**
+ * Tenant-scoped store for provider usage events and the versioned price catalog.
+ *
+ * Usage events carry a TTL and self-delete after the configured retention.
+ */
 export const usageRepository = {
+  /**
+   * Finds the price version in effect for a provider/model at a point in time.
+   *
+   * @param provider - Provider name (e.g. "openai").
+   * @param model - Model identifier.
+   * @param at - Reference time; defaults to now.
+   * @returns The highest active version effective at `at`, or null when unpriced.
+   */
   async activePrice(provider: string, model: string, at = new Date()) {
     const { prices } = await collections();
     return prices.findOne(
@@ -31,6 +44,16 @@ export const usageRepository = {
     );
   },
 
+  /**
+   * Publishes a new price version for a provider/model, retiring the active one.
+   *
+   * Prices are immutable versions rather than edits so historical cost
+   * estimates remain reproducible against the price that was in effect.
+   *
+   * @param input - Provider, model, per-million-token micros, and effective time.
+   * @param actor - Principal publishing the price.
+   * @returns The newly active price record.
+   */
   async upsertPrice(input: UpsertPriceCatalogInput, actor: string) {
     const { prices } = await collections();
     const tenantId = currentTenantId();
@@ -62,11 +85,24 @@ export const usageRepository = {
     return record;
   },
 
+  /**
+   * @returns All price catalog versions for the tenant, grouped by provider/model.
+   */
   async listPrices() {
     const { prices } = await collections();
     return prices.find(tenantFilter(), { projection: { _id: 0 } }).sort({ provider: 1, model: 1, version: -1 }).toArray();
   },
 
+  /**
+   * Records one provider call's token usage and estimated cost.
+   *
+   * `estimatedCostMicros` is null when no price version applied; `priceVersion`
+   * records which catalog version produced the estimate so it stays auditable.
+   *
+   * @param input - Provider/model, calling agent and operation, optional run
+   *   linkage, token usage, and the cost estimate.
+   * @returns The inserted usage event.
+   */
   async record(input: {
     provider: string;
     model: string;
@@ -99,6 +135,11 @@ export const usageRepository = {
     return event;
   },
 
+  /**
+   * @param limit - Maximum events returned (clamped to 1..1000), newest first.
+   * @param filters - Optional project and run filters.
+   * @returns Usage events for the tenant.
+   */
   async list(limit = 200, filters: { projectId?: string; runId?: string } = {}) {
     const { usage } = await collections();
     return usage.find(tenantFilter({
@@ -107,6 +148,13 @@ export const usageRepository = {
     }), { projection: { _id: 0 } }).sort({ occurredAt: -1 }).limit(Math.min(Math.max(limit, 1), 1_000)).toArray();
   },
 
+  /**
+   * Aggregates token and cost totals per provider/model.
+   *
+   * @param since - Start of the aggregation window; defaults to 30 days ago.
+   * @returns The window start plus one aggregate row per provider/model,
+   *   including a count of events that had no applicable price.
+   */
   async summary(since = new Date(Date.now() - 30 * 86_400_000)) {
     const { usage } = await collections();
     const rows = await usage.aggregate<{

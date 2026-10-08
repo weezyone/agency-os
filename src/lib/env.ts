@@ -321,6 +321,7 @@ const envSchema = z.object({
   }
 });
 
+/** Validated, default-filled process environment for the control plane. */
 export type Env = z.infer<typeof envSchema>;
 let cached: Env | undefined;
 
@@ -333,6 +334,12 @@ function envFileMode() {
 
 // Next.js loads `.env*` for `next dev` / `next start`. Standalone `tsx` processes
 // such as the execution runner do not, so env() fills the same files first.
+/**
+ * Loads the `.env*` files for the current mode into `process.env`, most
+ * specific first. Existing variables always win over file values.
+ *
+ * @param dir - Directory containing the env files.
+ */
 export function loadProjectEnv(dir = process.cwd()) {
   const mode = envFileMode();
   const files = [
@@ -355,6 +362,12 @@ export function loadProjectEnv(dir = process.cwd()) {
   }
 }
 
+/**
+ * Returns the validated environment, parsing and caching on first call.
+ *
+ * @throws {z.ZodError} When the process environment fails schema or
+ *   cross-field validation (including the production-only invariants).
+ */
 export function env(): Env {
   // Vitest sets VITEST=true. Skip project files so unit tests keep an isolated process.env.
   if (!process.env.VITEST) {
@@ -364,6 +377,7 @@ export function env(): Env {
   return cached;
 }
 
+/** Clears the cached environment so tests can re-parse with fresh variables. */
 export function resetEnvForTests() {
   cached = undefined;
 }

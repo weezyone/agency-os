@@ -61,7 +61,19 @@ async function appendEvent(input: Omit<ExecutionEvent, "id" | "tenantId" | "crea
   return event;
 }
 
+/**
+ * Tenant-scoped store for execution runs, attempts, and their audit events.
+ *
+ * A run has at most one active slot per task, enforced by the sparse unique
+ * index on `(tenantId, activeKey)`; terminal transitions unset `activeKey`.
+ */
 export const executionRepository = {
+  /**
+   * Queues a run idempotently: returns the existing active run for the task when present.
+   *
+   * @param input - Run fields except server-managed status, attempt, and timestamp state.
+   * @returns The existing active run or the newly created one.
+   */
   async queue(input: Omit<ExecutionRun, "id" | "tenantId" | "status" | "currentAttempt" | "lastWorkerOutput" | "lastQa" | "lastError" | "cancellationReason" | "workspaceId" | "createdAt" | "updatedAt" | "completedAt" | "activeKey">) {
     const { runs } = await collections();
     const tenantId = currentTenantId();
@@ -107,11 +119,19 @@ export const executionRepository = {
     return run;
   },
 
+  /**
+   * @param id - Run id within the current tenant.
+   * @returns The run record, or null when not found.
+   */
   async get(id: string) {
     const { runs } = await collections();
     return runs.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param id - Run id within the current tenant.
+   * @returns The run with its attempts (by number) and chronological events, or null when not found.
+   */
   async getDetail(id: string) {
     const { runs, attempts, events } = await collections();
     const run = await runs.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -123,6 +143,10 @@ export const executionRepository = {
     return { run, attempts: runAttempts, events: runEvents };
   },
 
+  /**
+   * @param projectId - Project id within the current tenant.
+   * @returns Up to 100 recent project runs with their latest attempts and events.
+   */
   async listProjectActivity(projectId: string) {
     const { runs, attempts, events } = await collections();
     const projectRuns = await runs
@@ -149,6 +173,17 @@ export const executionRepository = {
     return { runs: projectRuns, attempts: projectAttempts, events: projectEvents };
   },
 
+  /**
+   * Starts the next attempt of a queued or revision-requested run.
+   *
+   * The atomic status guard plus the `maxAttempts` pre-check ensure attempts
+   * are handed out sequentially and never beyond the configured budget.
+   *
+   * @param id - Run id within the current tenant.
+   * @param actor - Entity claiming the run (for the audit event).
+   * @returns The running run with incremented `currentAttempt`, or null when
+   *   not claimable (missing, wrong status, or attempts exhausted).
+   */
   async claim(id: string, actor: string) {
     const { runs } = await collections();
     const current = await runs.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -178,6 +213,12 @@ export const executionRepository = {
     return claimed;
   },
 
+  /**
+   * Creates the attempt record matching the run's current attempt number.
+   *
+   * @param run - The run just claimed; its `currentAttempt` becomes the attempt number.
+   * @returns The inserted attempt.
+   */
   async createAttempt(run: ExecutionRun) {
     const { attempts } = await collections();
     const attempt: ExecutionAttempt = {
@@ -201,6 +242,15 @@ export const executionRepository = {
     return attempt;
   },
 
+  /**
+   * Links a provisioned workspace to a running run and its current attempt.
+   *
+   * @param runId - Run id within the current tenant.
+   * @param attemptId - Attempt to attach; only updated while still workspace-less.
+   * @param workspaceId - Workspace id to record.
+   * @param actor - Entity performing the attach (for the audit event).
+   * @returns The updated run, or null when it is no longer running.
+   */
   async attachWorkspace(runId: string, attemptId: string, workspaceId: string, actor: string) {
     const { runs, attempts } = await collections();
     const now = new Date();
@@ -227,6 +277,15 @@ export const executionRepository = {
     return run;
   },
 
+  /**
+   * Records worker output on the attempt and advances the run to QA review.
+   *
+   * @param runId - Run id within the current tenant.
+   * @param attemptId - Attempt that produced the output.
+   * @param output - Structured worker result (artifacts, blockers, summary).
+   * @param actor - Entity reporting completion (for the audit event).
+   * @returns The run now in "qa_review", or null when it is no longer running.
+   */
   async markWorkerCompleted(runId: string, attemptId: string, output: WorkerOutput, actor: string) {
     const { runs, attempts } = await collections();
     const now = new Date();
@@ -253,6 +312,13 @@ export const executionRepository = {
     return run;
   },
 
+  /**
+   * Appends the "qa_started" audit event for a run.
+   *
+   * @param run - Run entering QA review.
+   * @param actor - Entity starting QA (for the audit event).
+   * @returns The inserted event.
+   */
   async markQaStarted(run: ExecutionRun, actor: string) {
     return appendEvent({
       runId: run.id,
@@ -265,6 +331,15 @@ export const executionRepository = {
     });
   },
 
+  /**
+   * Closes an attempt with its QA result and moves the run to the matching status.
+   *
+   * Only a run still in "qa_review" can transition; terminal outcomes
+   * ("passed"/"failed") release the task's active-run slot.
+   *
+   * @param input - Run/attempt ids, QA verdict, target status, and actor.
+   * @returns The updated run, or null when the run left "qa_review" concurrently.
+   */
   async finishAttempt(input: {
     runId: string;
     attemptId: string;
@@ -318,6 +393,17 @@ export const executionRepository = {
     return run;
   },
 
+  /**
+   * Approves a run awaiting workspace review, marking it passed.
+   *
+   * The `workspaceId` in the guard proves the reviewer approved the exact
+   * workspace they inspected, not a later replacement.
+   *
+   * @param id - Run id within the current tenant.
+   * @param actor - Approving principal.
+   * @param workspaceId - Workspace under review.
+   * @returns The passed run, or null when not awaiting that workspace's approval.
+   */
   async approveWorkspace(id: string, actor: string, workspaceId: string) {
     const { runs } = await collections();
     const now = new Date();
@@ -343,6 +429,16 @@ export const executionRepository = {
     return run;
   },
 
+  /**
+   * Rejects a workspace under review, requesting revision while attempts remain.
+   *
+   * @param id - Run id within the current tenant.
+   * @param actor - Rejecting principal.
+   * @param workspaceId - Workspace under review.
+   * @param reason - Human-readable rejection reason.
+   * @returns The run in "revision_requested" (or terminally "failed" when the
+   *   attempt budget is exhausted), or null when not awaiting that workspace.
+   */
   async rejectWorkspace(id: string, actor: string, workspaceId: string, reason: string) {
     const { runs } = await collections();
     const current = await runs.findOne(tenantFilter({ id, status: "approval_required", workspaceId }), { projection: { _id: 0 } });
@@ -378,6 +474,17 @@ export const executionRepository = {
   },
 
 
+  /**
+   * Interrupts the in-flight attempt after an infrastructure failure (e.g. lost lease).
+   *
+   * `expectedAttemptNumber` makes the operation safe against races with the
+   * worker: if the run already advanced to a new attempt, nothing is
+   * interrupted. While attempts remain the run goes back to
+   * "revision_requested"; otherwise it fails terminally.
+   *
+   * @param input - Run id, actor, error description, and optional attempt fence.
+   * @returns The current run and whether an interruption was applied.
+   */
   async interruptCurrentAttempt(input: {
     runId: string;
     actor: string;
@@ -439,6 +546,12 @@ export const executionRepository = {
     };
   },
 
+  /**
+   * Fails a running/qa_review run outright and closes the attempt with an error.
+   *
+   * @param input - Run id, attempt id, actor, and error description.
+   * @returns The failed run, or null when it is no longer in flight.
+   */
   async failAttempt(input: { runId: string; attemptId: string; actor: string; error: string }) {
     const { runs, attempts } = await collections();
     const now = new Date();
@@ -468,6 +581,14 @@ export const executionRepository = {
     return run;
   },
 
+  /**
+   * Cancels a run from the control plane, guarded by allowed statuses and an
+   * optional attempt fence so a stale cancel cannot kill a newer attempt.
+   *
+   * @param input - Run id, actor, reason, allowed current statuses, and optional
+   *   attempt fence.
+   * @returns The current run and whether the cancellation was applied.
+   */
   async cancelFromControl(input: {
     runId: string;
     actor: string;
@@ -532,6 +653,15 @@ export const executionRepository = {
     };
   },
 
+  /**
+   * Cancels a run that has not started executing (queued, revision requested,
+   * or awaiting approval).
+   *
+   * @param id - Run id within the current tenant.
+   * @param actor - Cancelling principal.
+   * @param reason - Human-readable cancellation reason.
+   * @returns The cancelled run, or null when its status cannot be cancelled here.
+   */
   async cancel(id: string, actor: string, reason: string) {
     const { runs } = await collections();
     const now = new Date();
@@ -562,6 +692,11 @@ export const executionRepository = {
     return run;
   },
 
+  /**
+   * @param status - Run status to filter by.
+   * @param limit - Maximum runs returned, most recently updated first.
+   * @returns Tenant runs in the given status.
+   */
   async listByStatus(status: ExecutionRunStatus, limit = 50) {
     const { runs } = await collections();
     return runs.find(tenantFilter({ status }), { projection: { _id: 0 } }).sort({ updatedAt: -1 }).limit(limit).toArray();

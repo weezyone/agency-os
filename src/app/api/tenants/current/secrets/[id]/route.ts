@@ -3,6 +3,11 @@ import { requirePrincipal } from "@/lib/authorization";
 import { apiError } from "@/lib/http";
 import { secretRepository } from "@/repositories/secret-repository";
 
+/**
+ * Tenant-secret revocation endpoint, scoped to the caller's tenant.
+ */
+
+/** Revoke (soft-delete) a tenant secret. Requires `admin:secrets`; 404 when the secret does not exist. */
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     await requirePrincipal(request, "admin:secrets");

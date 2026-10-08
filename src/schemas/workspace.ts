@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+/**
+ * Workspace contracts for execution runs that mutate a real repository.
+ *
+ * Covers worker-requested file changes, sandboxed command evidence, validation
+ * results, and the workspace record lifecycle (prepare -> apply -> validate ->
+ * human review -> publish or clean), plus the input schemas for binding
+ * repositories, reviewing workspaces, and proposing a publish. Records are
+ * persisted by the workspace repository; input schemas are parsed at API and
+ * service boundaries.
+ */
 export const workspaceProviderSchema = z.enum(["local-process", "docker-isolated", "remote-http"]);
 
 export const workspaceStatusSchema = z.enum([
@@ -18,6 +28,10 @@ export const workspaceStatusSchema = z.enum([
 export const workspaceReviewStatusSchema = z.enum(["pending", "approved", "rejected"]);
 export const workspaceChangeOperationSchema = z.enum(["create", "update", "delete"]);
 
+/**
+ * One repository-relative file mutation. Cross-field invariant: delete changes
+ * must not carry content; create/update changes must.
+ */
 export const workspaceFileChangeSchema = z.object({
   operation: workspaceChangeOperationSchema,
   path: z.string().min(1).max(500),
@@ -73,6 +87,7 @@ export const workspaceCommandSchema = z.object({
   completedAt: z.date().nullable(),
 });
 
+/** Outcome of running the operator-allowlisted validation scripts against the workspace. */
 export const workspaceValidationResultSchema = z.object({
   requestedScripts: z.array(z.string()).default([]),
   executedScripts: z.array(z.string()).default([]),

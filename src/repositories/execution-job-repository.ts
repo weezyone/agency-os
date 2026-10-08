@@ -11,6 +11,9 @@ import type {
   RunnerNode,
 } from "@/schemas/execution-job";
 
+// Only the SHA-256 of a lease token is persisted: anyone with read access to
+// the jobs collection (or a leaked backup) cannot steal a live lease and pose
+// as the owning runner.
 function tokenHash(token: string) {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
@@ -83,7 +86,27 @@ function clearLease() {
   };
 }
 
+/**
+ * Tenant-scoped store for distributed execution jobs.
+ *
+ * Jobs are claimed under short-lived leases identified by a random token
+ * (stored hashed) and a monotonically increasing `leaseGeneration`. Every
+ * mutation by a runner re-checks owner, token hash, and lease expiry, so a
+ * runner whose lease was reaped loses the ability to write — the fencing that
+ * prevents two runners from driving the same job after a partition or stall.
+ */
 export const executionJobRepository = {
+  /**
+   * Enqueues a run execution job idempotently: one active job per run.
+   *
+   * The sparse unique index on `(tenantId, activeKey)` enforces single-active
+   * execution; terminal states unset `activeKey` to release the slot. A racing
+   * enqueue re-reads the winner instead of failing.
+   *
+   * @param input - Run linkage, scheduling attributes (queue, resource class,
+   *   region, priority), admission reservation, and delivery budget.
+   * @returns The existing active job or the newly created one.
+   */
   async enqueue(input: {
     runId: string;
     projectId: string;
@@ -153,11 +176,19 @@ export const executionJobRepository = {
     return job;
   },
 
+  /**
+   * @param id - Job id within the current tenant.
+   * @returns The job record, or null when not found.
+   */
   async get(id: string) {
     const { jobs } = await collections();
     return jobs.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param id - Job id within the current tenant.
+   * @returns The job with its chronological lifecycle events, or null when not found.
+   */
   async getDetail(id: string) {
     const { jobs, events } = await collections();
     const job = await jobs.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -169,6 +200,10 @@ export const executionJobRepository = {
     return { job, events: jobEvents };
   },
 
+  /**
+   * @returns Per-status counts, derived ready/active totals, and the creation
+   *   time of the oldest currently runnable job (queue lag indicator).
+   */
   async summary() {
     const { jobs } = await collections();
     const statuses = ["queued", "leased", "running", "retry_wait", "succeeded", "failed", "dead_letter", "cancelled"] as const;
@@ -187,6 +222,11 @@ export const executionJobRepository = {
     };
   },
 
+  /**
+   * @param status - Status to filter by.
+   * @param limit - Maximum jobs returned, least recently updated first.
+   * @returns Tenant jobs in the given status.
+   */
   async listByStatus(status: ExecutionJob["status"], limit = 200) {
     const { jobs } = await collections();
     return jobs
@@ -198,11 +238,21 @@ export const executionJobRepository = {
 
 
 
+  /**
+   * Cross-tenant variant of {@link executionJobRepository.listByStatus} for platform operators.
+   *
+   * @param status - Status to filter by.
+   * @param limit - Maximum jobs returned, least recently updated first.
+   * @returns Jobs in the given status across all tenants.
+   */
   async listByStatusAllTenants(status: ExecutionJob["status"], limit = 200) {
     const { jobs } = await collections();
     return jobs.find({ status }, { projection: { _id: 0 } }).sort({ updatedAt: 1 }).limit(limit).toArray();
   },
 
+  /**
+   * @returns Cross-tenant counts of runnable and in-flight jobs, used for global admission decisions.
+   */
   async globalAdmissionSummary() {
     const { jobs } = await collections();
     const [ready, active] = await Promise.all([
@@ -212,11 +262,19 @@ export const executionJobRepository = {
     return { ready, active };
   },
 
+  /**
+   * @param runId - Run id within the current tenant.
+   * @returns The run's active execution job (via its `activeKey` slot), or null.
+   */
   async getActiveForRun(runId: string) {
     const { jobs } = await collections();
     return jobs.findOne(tenantFilter({ activeKey: `run:${runId}:execute` }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param runId - Run id within the current tenant.
+   * @returns All jobs for the run (newest first) with their chronological events.
+   */
   async listForRun(runId: string) {
     const { jobs, events } = await collections();
     const runJobs = await jobs.find(tenantFilter({ runId }), { projection: { _id: 0 } }).sort({ createdAt: -1 }).toArray();
@@ -227,6 +285,10 @@ export const executionJobRepository = {
     return { jobs: runJobs, jobEvents: runEvents };
   },
 
+  /**
+   * @param projectId - Project id within the current tenant.
+   * @returns Up to 200 recent project jobs and up to 500 of their latest events.
+   */
   async listProject(projectId: string) {
     const { jobs, events } = await collections();
     const projectJobs = await jobs
@@ -245,6 +307,10 @@ export const executionJobRepository = {
     return { jobs: projectJobs, jobEvents: projectEvents };
   },
 
+  /**
+   * @param projectId - Project id within the current tenant.
+   * @returns Count of the project's jobs that are not in a terminal state.
+   */
   async countProjectActive(projectId: string) {
     const { jobs } = await collections();
     return jobs.countDocuments(tenantFilter({
@@ -253,6 +319,19 @@ export const executionJobRepository = {
     }));
   },
 
+  /**
+   * Recovers jobs whose lease expired before completion (runner crashed or stalled).
+   *
+   * Each recovery re-matches on status, `leaseGeneration`, and the still-expired
+   * lease, so a heartbeat that raced the scan wins and the job is not yanked
+   * from under a healthy runner. Jobs with a pending cancellation are requeued
+   * without backoff, ahead of the delivery-budget check, so the next claim can
+   * finalize the cancellation; otherwise exhausted jobs go to dead letter and
+   * the rest wait `retryDelayMs` before retrying.
+   *
+   * @param input - Recovery actor, retry backoff delay, and batch limit.
+   * @returns The jobs actually recovered by this pass.
+   */
   async reapExpiredLeases(input: { actor: string; retryDelayMs: number; limit?: number }) {
     const { jobs } = await collections();
     const now = new Date();
@@ -342,6 +421,18 @@ export const executionJobRepository = {
     return recovered;
   },
 
+  /**
+   * Atomically claims the highest-priority runnable job matching this runner's
+   * region, queues, and resource classes.
+   *
+   * The claim is a single find-and-modify, so exactly one runner wins even with
+   * many pollers. It increments `leaseGeneration` — the fencing token — so any
+   * stale write from a previous lease holder fails its generation/owner/token
+   * guard instead of corrupting the job.
+   *
+   * @param input - Runner identity, lease duration, and scheduling constraints.
+   * @returns The claimed job with its plaintext lease token (never persisted), or null when empty.
+   */
   async claimNext(input: {
     runnerId: string;
     leaseMs: number;
@@ -407,6 +498,14 @@ export const executionJobRepository = {
     return { job, leaseToken };
   },
 
+  /**
+   * Marks a freshly claimed job as running, fenced by owner, token, expiry, and cancellation state.
+   *
+   * @param id - Job id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token from {@link executionJobRepository.claimNext}.
+   * @returns The running job, or null when the lease guard does not hold.
+   */
   async start(id: string, runnerId: string, leaseToken: string) {
     const { jobs } = await collections();
     const now = new Date();
@@ -437,6 +536,18 @@ export const executionJobRepository = {
     return job;
   },
 
+  /**
+   * Extends a live lease, fenced by owner and token.
+   *
+   * Refuses to heartbeat cancelled jobs so a runner always learns about
+   * cancellation on its next heartbeat.
+   *
+   * @param id - Job id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @param leaseMs - Extension duration in milliseconds.
+   * @returns The updated job, or null when the lease is no longer valid.
+   */
   async heartbeat(id: string, runnerId: string, leaseToken: string, leaseMs: number) {
     const { jobs } = await collections();
     const now = new Date();
@@ -460,6 +571,17 @@ export const executionJobRepository = {
     );
   },
 
+  /**
+   * Reads a job while verifying lease ownership, without filtering on cancellation.
+   *
+   * Unlike {@link executionJobRepository.assertLease} this still returns
+   * cancellation-pending jobs so callers can observe and acknowledge them.
+   *
+   * @param id - Job id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @returns The job when the lease guard holds, otherwise null.
+   */
   async inspectOwnedLease(id: string, runnerId: string, leaseToken: string) {
     const { jobs } = await collections();
     const now = new Date();
@@ -475,11 +597,35 @@ export const executionJobRepository = {
     );
   },
 
+  /**
+   * Confirms the caller still holds a valid lease on a running, uncancelled job.
+   *
+   * Runners must call this before any externally visible side effect; a null
+   * result means another runner may have taken over and work must stop.
+   *
+   * @param id - Job id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @returns The job when still exclusively owned and running, otherwise null.
+   */
   async assertLease(id: string, runnerId: string, leaseToken: string) {
     const job = await executionJobRepository.inspectOwnedLease(id, runnerId, leaseToken);
     return job?.status === "running" && !job.cancelRequestedAt ? job : null;
   },
 
+  /**
+   * Marks a running job as succeeded and releases its active-run slot.
+   *
+   * The fenced filter (owner + token + expiry + not cancelled) guarantees only
+   * the current lease holder can record the result, so a reaped runner's late
+   * completion cannot overwrite a successor's state.
+   *
+   * @param id - Job id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @param result - Structured job result stored on the record and audit event.
+   * @returns The succeeded job, or null when the lease guard does not hold.
+   */
   async complete(id: string, runnerId: string, leaseToken: string, result: ExecutionJobResult) {
     const { jobs } = await collections();
     const now = new Date();
@@ -520,6 +666,18 @@ export const executionJobRepository = {
     return job;
   },
 
+  /**
+   * Fails a leased job, scheduling a retry while the delivery budget lasts.
+   *
+   * Retryable failures re-enter the queue after `retryDelayMs` backoff;
+   * non-retryable failures, or retries past `maxDeliveries`, become terminal
+   * (`failed` vs `dead_letter`) and release the active-run slot. The second
+   * update re-matches on `leaseGeneration` so a concurrent lease change
+   * between the read and the write aborts the transition.
+   *
+   * @param input - Job id, lease credentials, error message, retryability, and backoff.
+   * @returns The transitioned job, or null when the lease guard does not hold.
+   */
   async fail(input: {
     id: string;
     runnerId: string;
@@ -594,6 +752,14 @@ export const executionJobRepository = {
     return job;
   },
 
+  /**
+   * Confirms a runner observed a cancellation request and stopped the job.
+   *
+   * @param id - Job id.
+   * @param runnerId - Runner holding the lease.
+   * @param leaseToken - Plaintext lease token.
+   * @returns The cancelled job, or null when no cancellation is pending for this lease.
+   */
   async acknowledgeCancellation(id: string, runnerId: string, leaseToken: string) {
     const { jobs } = await collections();
     const now = new Date();
@@ -626,6 +792,14 @@ export const executionJobRepository = {
     return job;
   },
 
+  /**
+   * Manually requeues a failed or dead-lettered job with a fresh delivery budget.
+   *
+   * @param id - Job id within the current tenant.
+   * @param actor - Principal requesting the retry.
+   * @returns The requeued job, or null when not in a retryable terminal state.
+   * @throws {Error} If another job already holds the run's active slot.
+   */
   async retry(id: string, actor: string) {
     const { jobs } = await collections();
     const current = await jobs.findOne(
@@ -676,6 +850,20 @@ export const executionJobRepository = {
     return job;
   },
 
+  /**
+   * Cancels a job: immediately when not yet leased, cooperatively when running.
+   *
+   * Queued/retry-waiting jobs transition straight to "cancelled". Leased or
+   * running jobs only get `cancelRequestedAt` set — the owning runner must
+   * observe it (via heartbeat/assertLease) and acknowledge, because only the
+   * runner can stop the actual workspace work.
+   *
+   * @param id - Job id within the current tenant.
+   * @param actor - Principal requesting cancellation.
+   * @param reason - Human-readable cancellation reason.
+   * @returns The cancelled/flagged job, the current record when already
+   *   cancelling, or null when the job is in a state that cannot be cancelled.
+   */
   async requestCancellation(id: string, actor: string, reason: string) {
     const { jobs } = await collections();
     const now = new Date();
@@ -734,7 +922,14 @@ export const executionJobRepository = {
   },
 };
 
+/** Registry of runner nodes (identity, liveness, and drain state) for the execution fleet. */
 export const runnerRepository = {
+  /**
+   * Registers (or re-registers on restart) a runner node as online.
+   *
+   * @param input - Runner identity, version, provider, region, queues, and capacity.
+   * @returns The stored runner node.
+   */
   async register(input: Omit<RunnerNode, "status" | "activeJobIds" | "startedAt" | "lastSeenAt" | "stoppedAt">) {
     const { runners } = await collections();
     const now = new Date();
@@ -754,6 +949,11 @@ export const runnerRepository = {
     return node;
   },
 
+  /**
+   * @param id - Runner id.
+   * @param activeJobIds - Jobs currently in flight on this runner.
+   * @returns The runner marked online with a fresh `lastSeenAt`, or null when unknown.
+   */
   async heartbeat(id: string, activeJobIds: string[]) {
     const { runners } = await collections();
     return runners.findOneAndUpdate(
@@ -763,6 +963,13 @@ export const runnerRepository = {
     );
   },
 
+  /**
+   * Marks a runner as draining so operators can see it is finishing work before shutdown.
+   *
+   * @param id - Runner id.
+   * @param activeJobIds - Jobs still in flight at drain time.
+   * @returns The updated runner node, or null when unknown.
+   */
   async drain(id: string, activeJobIds: string[]) {
     const { runners } = await collections();
     return runners.findOneAndUpdate(
@@ -772,6 +979,10 @@ export const runnerRepository = {
     );
   },
 
+  /**
+   * @param id - Runner id.
+   * @returns The runner marked offline with an empty active-job list, or null when unknown.
+   */
   async stop(id: string) {
     const { runners } = await collections();
     const now = new Date();
@@ -782,6 +993,10 @@ export const runnerRepository = {
     );
   },
 
+  /**
+   * @param limit - Maximum runners returned.
+   * @returns Runner nodes ordered by most recent heartbeat.
+   */
   async listRecent(limit = 50) {
     const { runners } = await collections();
     return runners.find({}, { projection: { _id: 0 } }).sort({ lastSeenAt: -1 }).limit(limit).toArray();

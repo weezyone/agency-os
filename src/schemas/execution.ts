@@ -1,6 +1,15 @@
 import { z } from "zod";
 import { workspaceFileChangeSchema } from "@/schemas/workspace";
 
+/**
+ * Contracts for bounded specialist task execution.
+ *
+ * Covers the run lifecycle (queued -> worker attempt -> QA verdict -> revision
+ * or human approval), the structured output workers must return, and the QA
+ * gate's verdict shape. Worker and QA agent outputs are parsed against
+ * `workerOutputSchema`/`qaResultSchema` in the execution service; run,
+ * attempt, and event records are persisted by the execution repository.
+ */
 export const agentRoleSchema = z.enum([
   "tech-lead",
   "research",
@@ -21,6 +30,7 @@ export const executionRunStatusSchema = z.enum([
   "cancelled",
 ]);
 
+/** `artifact`: the worker returns documents only. `workspace`: the worker mutates a real repository workspace. */
 export const executionModeSchema = z.enum(["artifact", "workspace"]);
 
 export const artifactTypeSchema = z.enum([
@@ -43,6 +53,11 @@ export const workerArtifactSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
 
+/**
+ * Structured output every worker agent must return. In workspace mode,
+ * `fileChanges` is the only channel for repository edits, and
+ * `requestedValidationScripts` is intersected with the operator allowlist.
+ */
 export const workerOutputSchema = z.object({
   summary: z.string().min(1),
   artifacts: z.array(workerArtifactSchema).max(20).default([]),
@@ -60,6 +75,7 @@ export const qaCriterionResultSchema = z.object({
   evidence: z.string().min(1),
 });
 
+/** Structured verdict returned by the quality-gate agent for one worker attempt. */
 export const qaResultSchema = z.object({
   score: z.number().int().min(0).max(100),
   verdict: z.enum(["pass", "revise", "fail"]),

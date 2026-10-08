@@ -29,7 +29,25 @@ function utcDay() {
   return new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * Tenant-scoped admission control: daily usage budgets and idempotent reservations.
+ *
+ * Budget checks and reservation writes commit in one transaction so a run can
+ * never hold a reservation without the matching units having been debited.
+ */
 export const admissionRepository = {
+  /**
+   * Reserves execution units against the tenant's daily budget, idempotent on `key`.
+   *
+   * The budget increment is conditional on `reserved + consumed + units <= limit`
+   * evaluated inside MongoDB, so concurrent runners cannot oversell the budget.
+   * A previously released reservation with the same key is reactivated instead
+   * of duplicated.
+   *
+   * @param input - Reservation key, run linkage, execution mode, and unit count.
+   * @returns The existing, reactivated, or newly created reservation.
+   * @throws {Error} If the daily budget is exhausted or the reservation changed concurrently.
+   */
   async reserve(input: {
     key: string;
     runId: string;
@@ -117,6 +135,13 @@ export const admissionRepository = {
     });
   },
 
+  /**
+   * Links a reserved admission to its execution job, at most once.
+   *
+   * @param id - Reservation id within the current tenant.
+   * @param jobId - Execution job id to attach.
+   * @returns The updated reservation, or null when already attached or not reserved.
+   */
   async attachJob(id: string, jobId: string) {
     const { reservations } = await collections();
     return reservations.findOneAndUpdate(
@@ -126,6 +151,16 @@ export const admissionRepository = {
     );
   },
 
+  /**
+   * Settles a reservation by moving its units from reserved to consumed or released.
+   *
+   * Units are bucketed by the reservation's creation day (not settlement day)
+   * so the totals always balance within a single bucket.
+   *
+   * @param id - Reservation id within the current tenant.
+   * @param outcome - "consumed" when the work ran, "released" when it will not.
+   * @returns The settled reservation, or the current record when already settled/not found.
+   */
   async settle(id: string, outcome: "consumed" | "released") {
     const { reservations, buckets } = await collections();
     return withMongoTransaction(async (session) => {
@@ -153,6 +188,9 @@ export const admissionRepository = {
     });
   },
 
+  /**
+   * @returns Today's budget bucket (or configured defaults) plus the count of active reservations.
+   */
   async currentSummary() {
     const { reservations, buckets } = await collections();
     const config = env();

@@ -7,6 +7,17 @@ import { env } from "@/lib/env";
 import { currentTenantId } from "@/lib/tenant-context";
 import { recordGenerationUsage } from "@/services/usage-service";
 
+/**
+ * Runs the full client intake pipeline: the intake agent structures the raw
+ * request, a client and planning-phase project are created, the planning
+ * agent produces a build-ready plan, and its tasks are persisted in the
+ * backlog. Token usage for both agent calls is recorded in the ledger;
+ * accounting failures are logged but never fail the intake.
+ *
+ * @param request The validated client intake request.
+ * @returns The created client, project, structured analysis, plan, and tasks.
+ * @throws When either agent's structured output fails schema validation.
+ */
 export async function runIntake(request: IntakeRequest) {
   const tenantId = currentTenantId();
   const resource = `tenant:${tenantId}:client:${request.email.toLowerCase()}`;

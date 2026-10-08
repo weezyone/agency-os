@@ -3,6 +3,8 @@ import { ZodError } from "zod";
 import { AuthenticationRequiredError, CsrfValidationError, PermissionDeniedError } from "@/lib/authorization";
 import { OperatorUnauthorizedError } from "@/lib/operator-auth";
 
+// Domain errors carry no status, so map well-known message phrasings to
+// 404/409; anything unrecognized stays a 500 and is never elaborated on.
 function statusForMessage(message: string) {
   const normalized = message.toLowerCase();
   if (normalized.includes("not found") || normalized.includes("no longer exists")) return 404;
@@ -20,6 +22,13 @@ function statusForMessage(message: string) {
   return 500;
 }
 
+/**
+ * Converts a thrown error into a JSON error response. Authn/authz/CSRF and
+ * Zod validation errors map to fixed statuses; other errors are classified by
+ * message. 5xx messages are hidden in production to avoid leaking internals.
+ *
+ * @param error - Error thrown by a route handler.
+ */
 export function apiError(error: unknown) {
   console.error(error);
   if (error instanceof AuthenticationRequiredError || error instanceof OperatorUnauthorizedError) {

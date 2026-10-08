@@ -87,6 +87,10 @@ function tokenHash(token: string) {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
+// Credential comparisons are timing-safe: a naive string compare would leak
+// how many prefix bytes matched and let an attacker recover hashes/token
+// material incrementally. The length check comes first because
+// timingSafeEqual throws on mismatched lengths.
 function safeEqualHex(left: string, right: string) {
   const a = Buffer.from(left, "hex");
   const b = Buffer.from(right, "hex");
@@ -136,7 +140,24 @@ async function persistApiKey(
   return { record, token: credential.token };
 }
 
+/**
+ * Tenant-scoped store for members, API keys, and browser sessions.
+ *
+ * API keys and session/CSRF tokens are persisted only as SHA-256 hashes, so a
+ * database leak never discloses usable credentials. Tokens embed their record
+ * id, letting authentication look up the candidate by id and then verify the
+ * secret with a timing-safe hash comparison.
+ */
 export const identityRepository = {
+  /**
+   * Creates a local (non-OIDC) member in a tenant.
+   *
+   * @param input - Member attributes (email is normalized to lowercase).
+   * @param createdBy - Actor id recorded as creator.
+   * @param tenantId - Target tenant; defaults to the current tenant context.
+   * @returns The created member.
+   * @throws {Error} If the email is already registered in the tenant.
+   */
   async createMember(input: CreateMemberInput, createdBy: string, tenantId = currentTenantId()) {
     const { members } = await collections();
     const email = normalizeEmail(input.email);
@@ -162,6 +183,14 @@ export const identityRepository = {
     return member;
   },
 
+  /**
+   * Creates the owner member of a new tenant, idempotent on email, as part of
+   * the tenant-creation transaction.
+   *
+   * @param input - Tenant id, owner email/display name, and creator actor.
+   * @param session - Optional MongoDB transaction session.
+   * @returns The existing or newly created owner member.
+   */
   async createOwnerMember(input: { tenantId: string; email: string; displayName: string; createdBy: string }, session?: ClientSession) {
     const { members } = await collections();
     const email = normalizeEmail(input.email);
@@ -177,6 +206,18 @@ export const identityRepository = {
     return member;
   },
 
+  /**
+   * Creates or links a tenant membership from an OIDC identity.
+   *
+   * An existing membership matched by email or subject is linked to the OIDC
+   * subject. Refusing to link when email and subject resolve to *different*
+   * members (or when the stored subject changed) prevents an identity provider
+   * from hijacking an existing local account by email collision.
+   *
+   * @param input - Tenant id, verified OIDC claims, role, and creator actor.
+   * @returns The linked or newly created member.
+   * @throws {Error} If the OIDC identity conflicts with an existing membership.
+   */
   async createOidcMember(input: {
     tenantId: string;
     email: string;
@@ -232,6 +273,14 @@ export const identityRepository = {
     return member;
   },
 
+  /**
+   * Updates a member's mutable fields; owner accounts cannot be demoted or
+   * disabled here (returning null) so a tenant cannot lock out its last owner.
+   *
+   * @param id - Member id within the current tenant.
+   * @param input - Fields to update.
+   * @returns The updated member, or null when not found or the change is forbidden.
+   */
   async updateMember(id: string, input: UpdateMemberInput) {
     const { members } = await collections();
     const current = await members.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
@@ -245,21 +294,41 @@ export const identityRepository = {
     );
   },
 
+  /**
+   * @returns All members of the current tenant, oldest first.
+   */
   async listMembers() {
     const { members } = await collections();
     return members.find(tenantFilter(), { projection: { _id: 0 } }).sort({ createdAt: 1 }).toArray();
   },
 
+  /**
+   * @param id - Member id within the current tenant.
+   * @returns The member, or null when not found.
+   */
   async getMember(id: string) {
     const { members } = await collections();
     return members.findOne(tenantFilter({ id }), { projection: { _id: 0 } });
   },
 
+  /**
+   * @param email - Member email (normalized before lookup).
+   * @param tenantId - Tenant to search; defaults to the current tenant context.
+   * @returns The member, or null when not found.
+   */
   async getMemberByEmail(email: string, tenantId = currentTenantId()) {
     const { members } = await collections();
     return members.findOne({ tenantId, email: normalizeEmail(email) }, { projection: { _id: 0 } });
   },
 
+  /**
+   * Issues an API key for an active member of the current tenant.
+   *
+   * @param input - Target member, key name, optional expiry, and creator actor.
+   * @returns The stored record plus the plaintext token, shown to the caller
+   *   exactly once (only its hash is persisted).
+   * @throws {Error} If the member is not active in the current tenant.
+   */
   async createApiKey(input: CreateApiKeyInput & { createdBy: string }) {
     const { members } = await collections();
     const member = await members.findOne(tenantFilter({ id: input.memberId, status: "active" }), { projection: { _id: 0 } });
@@ -271,6 +340,18 @@ export const identityRepository = {
     });
   },
 
+  /**
+   * Issues the first API key during tenant bootstrap, inside the creation transaction.
+   *
+   * Restricted to the active tenant owner: bootstrap must not mint credentials
+   * for lesser roles before the tenant's membership is established.
+   *
+   * @param member - The tenant owner receiving the key.
+   * @param input - Key name, creator actor, and optional expiry.
+   * @param session - Optional MongoDB transaction session.
+   * @returns The stored record plus the plaintext token (only its hash is persisted).
+   * @throws {Error} If the member is not the active tenant owner.
+   */
   async createInitialTenantApiKey(
     member: Member,
     input: { name: string; createdBy: string; expiresAt?: Date | null },
@@ -286,6 +367,10 @@ export const identityRepository = {
     }, session);
   },
 
+  /**
+   * @param memberId - Optional member filter within the current tenant.
+   * @returns API key records without token hashes, newest first.
+   */
   async listApiKeys(memberId?: string) {
     const { apiKeys } = await collections();
     return apiKeys
@@ -294,6 +379,10 @@ export const identityRepository = {
       .toArray();
   },
 
+  /**
+   * @param id - API key id within the current tenant.
+   * @returns The revoked key (hash omitted), or null when not found or already revoked.
+   */
   async revokeApiKey(id: string) {
     const { apiKeys } = await collections();
     return apiKeys.findOneAndUpdate(
@@ -303,6 +392,17 @@ export const identityRepository = {
     );
   },
 
+  /**
+   * Authenticates an API key token and touches last-used timestamps.
+   *
+   * Lookup is by the id embedded in the token; the secret is then compared via
+   * timing-safe hash equality, and revoked/expired keys and inactive members
+   * are rejected. Every failure path returns null so callers cannot
+   * distinguish "unknown key" from "wrong secret" or "disabled member".
+   *
+   * @param token - The `aos_...` API key token.
+   * @returns The key and owning member on success, otherwise null.
+   */
   async authenticateApiKey(token: string) {
     const id = credentialId(token, "aos");
     if (!id) return null;
@@ -324,6 +424,17 @@ export const identityRepository = {
     };
   },
 
+  /**
+   * Creates a browser session with a session token and a separate CSRF token.
+   *
+   * Both are stored hashed; user agent and IP are hashed too so session theft
+   * indicators are available without retaining PII. The session row expires
+   * via MongoDB TTL.
+   *
+   * @param member - Member the session belongs to.
+   * @param metadata - Optional request metadata (user agent, IP).
+   * @returns The stored session plus the one-time plaintext session and CSRF tokens.
+   */
   async createBrowserSession(member: Member, metadata: { userAgent?: string | null; ip?: string | null } = {}) {
     const { sessions } = await collections();
     const credential = createCredential("aos_session");
@@ -346,6 +457,15 @@ export const identityRepository = {
     return { session, token: credential.token, csrfToken };
   },
 
+  /**
+   * Authenticates a browser session token.
+   *
+   * `lastSeenAt` is throttled to one write per minute so high-traffic sessions
+   * do not turn every request into two writes. All failure modes return null.
+   *
+   * @param token - The `aos_session_...` session token.
+   * @returns The session and owning active member on success, otherwise null.
+   */
   async authenticateBrowserSession(token: string) {
     const id = credentialId(token, "aos_session");
     if (!id) return null;
@@ -365,12 +485,23 @@ export const identityRepository = {
     return { session: { ...session, lastSeenAt: now }, member };
   },
 
+  /**
+   * Checks a CSRF token against a live session using timing-safe comparison.
+   *
+   * @param sessionId - Session id within the current tenant.
+   * @param token - CSRF token from the request.
+   * @returns True when the session is unrevoked, unexpired, and the token matches.
+   */
   async verifyCsrf(sessionId: string, token: string) {
     const { sessions } = await collections();
     const session = await sessions.findOne(tenantFilter({ id: sessionId, revokedAt: null, expiresAt: { $gt: new Date() } }), { projection: { _id: 0 } });
     return Boolean(session && safeEqualHex(session.csrfTokenHash, tokenHash(token)));
   },
 
+  /**
+   * @param id - Session id within the current tenant.
+   * @returns The revoked session (hashes omitted), or null when not found or already revoked.
+   */
   async revokeBrowserSession(id: string) {
     const { sessions } = await collections();
     return sessions.findOneAndUpdate(
@@ -380,6 +511,12 @@ export const identityRepository = {
     );
   },
 
+  /**
+   * Revokes all live sessions of a member (e.g. on disable or credential reset).
+   *
+   * @param memberId - Member id within the current tenant.
+   * @returns The MongoDB update result.
+   */
   async revokeMemberSessions(memberId: string) {
     const { sessions } = await collections();
     return sessions.updateMany(tenantFilter({ memberId, revokedAt: null }), { $set: { revokedAt: new Date() } });

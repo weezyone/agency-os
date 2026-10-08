@@ -8,6 +8,16 @@ import { executionJobRepository, runnerRepository } from "@/repositories/executi
 import { outboxRepository } from "@/repositories/outbox-repository";
 import { workspaceRepository } from "@/repositories/workspace-repository";
 
+/**
+ * Aggregates a tenant-scoped operations snapshot: queue, outbox, admission
+ * budget, action, artifact, and workspace summaries plus a coarse view of
+ * runner fleet health. Runner identities and hostnames are deliberately
+ * reduced to provider/region/capacity because infrastructure topology is not
+ * tenant-facing data.
+ *
+ * @param options Set `probeArtifactStore` to include a live storage health probe.
+ * @returns The aggregated operations snapshot for the current tenant.
+ */
 export async function operationsSnapshot(options: { probeArtifactStore?: boolean } = {}) {
   const config = env();
   const [jobs, outbox, admission, runners, actions, artifacts, workspaces] = await Promise.all([
@@ -69,6 +79,12 @@ function metric(name: string, value: number, help: string, labels?: Record<strin
   return [`# HELP ${name} ${help}`, `# TYPE ${name} gauge`, `${name}${suffix} ${value}`].join("\n");
 }
 
+/**
+ * Renders the current operations snapshot in Prometheus text exposition
+ * format (gauges with HELP/TYPE headers).
+ *
+ * @returns Prometheus-compatible metrics payload for scraping.
+ */
 export async function prometheusMetrics() {
   const snapshot = await operationsSnapshot();
   const lines: string[] = [];

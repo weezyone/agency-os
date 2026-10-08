@@ -6,6 +6,12 @@ import { proposeLinearTaskSync } from "@/services/provisioning-service";
 
 const bodySchema = z.object({ linearProjectActionId: z.string().min(1) });
 
+/**
+ * Linear task-sync proposal endpoint: creates an approval-gated action that
+ * syncs Linear issues into project tasks once approved and executed.
+ */
+
+/** Propose a Linear task sync for a project. Requires `action:propose`; body must reference the Linear project action id. Returns 201. */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requirePrincipal(request, "action:propose");
