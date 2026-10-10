@@ -35,6 +35,12 @@ AGENCY_S3_SECRET_ACCESS_KEY=...
 
 Prefer workload identity, instance roles, or another short-lived credential mechanism instead of static keys.
 
+#### Server-side encryption
+
+`AGENCY_S3_SERVER_SIDE_ENCRYPTION` is optional. Leave it blank or unset when unused, such as with filesystem storage, or set it to exactly `AES256` or `aws:kms`. It is not a boolean. The `aws:kms` mode also requires `AGENCY_S3_KMS_KEY_ID`.
+
+All configured values are validated during startup, even when S3 is not the active provider. An unsupported encryption value in `.env.local` therefore prevents the Next.js instrumentation hook from loading. Correct that setting rather than disabling validation, then restart `npm run dev` (and any standalone runner that loaded the old value).
+
 ## Stored evidence
 
 A completed execution can persist:
